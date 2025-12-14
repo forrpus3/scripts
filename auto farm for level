@@ -348,32 +348,6 @@ function initializeScript()
 						part.CanCollide = false
 					end
 				end
-				
-				-- Keep player above ground level
-				if rootPart and humanoid then
-					local rayOrigin = rootPart.Position
-					local rayDirection = Vector3.new(0, -100, 0)
-					local raycastParams = RaycastParams.new()
-					raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-					raycastParams.FilterDescendantsInstances = {character}
-					
-					local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-					
-					if rayResult then
-						local groundY = rayResult.Position.Y
-						local playerY = rootPart.Position.Y
-						local minHeight = groundY + (humanoid.HipHeight + 2)
-						
-						-- If player is below minimum height, push them up
-						if playerY < minHeight then
-							rootPart.CFrame = CFrame.new(
-								rootPart.Position.X,
-								minHeight,
-								rootPart.Position.Z
-							) * (rootPart.CFrame - rootPart.Position)
-						end
-					end
-				end
 			end
 		end)
 	end
