@@ -90,18 +90,6 @@ function initializeScript()
 		character = char
 		humanoid = char:WaitForChild("Humanoid")
 		rootPart = char:WaitForChild("HumanoidRootPart")
-		
-		-- Reset initialFired flag when character respawns
-		initialFired = false
-		inPosition = false
-		print("[AUTO-BATTLE] Character respawned, initialFired reset to false")
-		
-		-- Restart movement if script is running
-		if isRunning then
-			movementLoopRunning = false
-			task.wait(0.5)
-			startMovement()
-		end
 	end
 	
 	bindCharacter(player.Character or player.CharacterAdded:Wait())
@@ -317,9 +305,6 @@ function initializeScript()
 					
 					-- Reset recharging flag to resume normal movement
 					isRecharging = false
-					
-					-- Reset initialFired so it fires again when returning to battle
-					initialFired = false
 				end
 				task.wait(10)
 			end
@@ -361,6 +346,32 @@ function initializeScript()
 				for _, part in pairs(character:GetDescendants()) do
 					if part:IsA("BasePart") then
 						part.CanCollide = false
+					end
+				end
+				
+				-- Keep player above ground level
+				if rootPart and humanoid then
+					local rayOrigin = rootPart.Position
+					local rayDirection = Vector3.new(0, -100, 0)
+					local raycastParams = RaycastParams.new()
+					raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+					raycastParams.FilterDescendantsInstances = {character}
+					
+					local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+					
+					if rayResult then
+						local groundY = rayResult.Position.Y
+						local playerY = rootPart.Position.Y
+						local minHeight = groundY + (humanoid.HipHeight + 2)
+						
+						-- If player is below minimum height, push them up
+						if playerY < minHeight then
+							rootPart.CFrame = CFrame.new(
+								rootPart.Position.X,
+								minHeight,
+								rootPart.Position.Z
+							) * (rootPart.CFrame - rootPart.Position)
+						end
 					end
 				end
 			end
@@ -443,12 +454,7 @@ function initializeScript()
 		end)
 	end
 	
-	local movementLoopRunning = false
-	
 	local function startMovement()
-		if movementLoopRunning then return end
-		movementLoopRunning = true
-		
 		task.spawn(function()
 			while isRunning do
 				if humanoid and rootPart and not isUnstucking and not isRecharging then
@@ -462,14 +468,12 @@ function initializeScript()
 	
 						if not initialFired then
 							initialFired = true
-							print("[AUTO-BATTLE] Firing launch remote!")
 							promptPlayerLaunch:FireServer(1, player.Character)
 						end
 					end
 				end
 				task.wait(MOVE_RATE)
 			end
-			movementLoopRunning = false
 		end)
 		
 		-- Stuck detection and pathfinding system
