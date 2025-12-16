@@ -6,7 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 
 -- KEY SYSTEM
-local CORRECT_KEY = "game"
+local CORRECT_KEY = "horse"
 local keyAuthenticated = false
 
 local function createKeySystem()
