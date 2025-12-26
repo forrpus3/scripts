@@ -1,5 +1,5 @@
 
---// KPERMANENT KEYS STORAGE
+--// realScripts KEYS STORAGE
 --[[ 
     Add your permanent keys here:
     Format: ["KeyName"] = "your_key_value_here"
