@@ -1,5 +1,5 @@
 
---// PERMANENT KEYS STORAGE
+--// KPERMANENT KEYS STORAGE
 --[[ 
     Add your permanent keys here:
     Format: ["KeyName"] = "your_key_value_here"
