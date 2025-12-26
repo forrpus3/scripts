@@ -1,437 +1,469 @@
---// PERMANENT KEYS STORAGE
---[[ 
-    Add your permanent keys here:
-    Format: ["KeyName"] = "your_key_value_here"
-]]
-local PERMANENT_KEYS = {
-    ["Key1"] = "TomasMan",
-    ["Key2"] = "",
-    ["Key3"] = "",
-    ["Key4"] = "",
-    ["Key5"] = "",
-}
-
---// SERVICES
+-- Load main script directly without key system
+loadstring([[
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local CoreGui = game:GetService("CoreGui")
-local TweenService = game:GetService("TweenService")
-local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
 
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local player = Players.LocalPlayer
 
---// VARIABLES
-local paperESPEnabled = true
-local meteorESPEnabled = true
-local espObjects = {}
-local tweenSpeed = 50
+local character, humanoid, rootPart
 
---// FUNCTIONS
-local function createESP(target)
-    if espObjects[target] then return end
-    local highlight = Instance.new("Highlight")
-    highlight.Adornee = target
-
-    if target:IsA("BasePart") and target.Name == "Paper" then
-        highlight.FillColor = Color3.fromRGB(0, 255, 0)
-    elseif target:IsA("Model") and target.Name == "Meteor" then
-        highlight.FillColor = Color3.fromRGB(255, 0, 0)
-    end
-
-    highlight.FillTransparency = 0.5
-    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-    highlight.OutlineTransparency = 0
-    highlight.Parent = CoreGui
-
-    espObjects[target] = highlight
+local function bindCharacter(char)
+	character = char
+	humanoid = char:WaitForChild("Humanoid")
+	rootPart = char:WaitForChild("HumanoidRootPart")
 end
 
-local function removeESP(target)
-    if espObjects[target] then
-        espObjects[target]:Destroy()
-        espObjects[target] = nil
-    end
+bindCharacter(player.Character or player.CharacterAdded:Wait())
+player.CharacterAdded:Connect(bindCharacter)
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local promptPlayerLaunch = remotes:WaitForChild("promptPlayerLaunch")
+local topsFolder = workspace:WaitForChild("Tops")
+
+local TARGET_POSITION = Vector3.new(
+	415.53619384765625,
+	120.1265640258789,
+	-86.57369232177734
+)
+
+local FACING_POSITION = Vector3.new(
+	424.9053955078125,
+	112.94845581054688,
+	-72.63363647460938
+)
+
+local RESPAWN_POSITION = Vector3.new(
+	578.4635009765625,
+	118.49895477294922,
+	-147.76657104492188
+)
+
+local POSITION_RADIUS = 3
+local MOVE_RATE = 0.15
+local ROTATE_SPEED = 10
+local RESPAWN_RADIUS = 5
+local STUCK_CHECK_INTERVAL = 2
+local STUCK_DISTANCE_THRESHOLD = 2
+local UNSTUCK_OFFSET_DISTANCE = 8
+
+local isRunning = false
+local inPosition = false
+local initialFired = false
+local lastPosition = nil
+local lastMoveTime = 0
+local isUnstucking = false
+local isRecharging = false
+local noclipConnection = nil
+
+local healthConnection = nil
+local rotateConnection = nil
+local modelConnection = nil
+local energyConnection = nil
+
+local gui = Instance.new("ScreenGui")
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 180, 0, 100)
+frame.Position = UDim2.new(0.5, -90, 0.1, 0)
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(1, 0, 0, 60)
+button.Position = UDim2.new(0, 0, 0, 0)
+button.Text = "START"
+button.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+button.TextColor3 = Color3.new(1,1,1)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 18
+button.BorderSizePixel = 0
+button.Parent = frame
+
+local keyLabel = Instance.new("TextLabel")
+keyLabel.Size = UDim2.new(1, 0, 0, 35)
+keyLabel.Position = UDim2.new(0, 0, 0, 65)
+keyLabel.Text = "Press O to toggle"
+keyLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+keyLabel.TextColor3 = Color3.new(1, 1, 1)
+keyLabel.Font = Enum.Font.Gotham
+keyLabel.TextSize = 14
+keyLabel.BorderSizePixel = 0
+keyLabel.Parent = frame
+
+local function getCharacter()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char, char:WaitForChild("Humanoid")
 end
 
-local function checkDescendant(desc)
-    if desc:IsA("BasePart") and desc.Name == "Paper" and paperESPEnabled then
-        createESP(desc)
-    elseif desc:IsA("Model") and desc.Name == "Meteor" and meteorESPEnabled then
-        createESP(desc)
-        StarterGui:SetCore("SendNotification", {
-            Title = "Meteor Detected!",
-            Text = "A Meteor has spawned!",
-            Duration = 10
-        })
-    end
+local function getEnergyBar()
+	return player.PlayerGui
+		:WaitForChild("HUD")
+		:WaitForChild("Main HUD")
+		:WaitForChild("Energy")
+		:WaitForChild("Progress")
 end
 
-local function cleanup()
-    for obj, _ in pairs(espObjects) do
-        if not obj:IsDescendantOf(game) then
-            removeESP(obj)
-        end
-    end
+local function findNearbyProximityPrompt(position, maxDistance)
+	local closestPrompt = nil
+	local closestDistance = maxDistance
+	
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") and obj.Enabled then
+			local parent = obj.Parent
+			local promptPos = nil
+			
+			if parent:IsA("BasePart") then
+				promptPos = parent.Position
+			elseif parent:IsA("Model") then
+				if parent.PrimaryPart then
+					promptPos = parent.PrimaryPart.Position
+				else
+					local part = parent:FindFirstChildWhichIsA("BasePart", true)
+					if part then
+						promptPos = part.Position
+					end
+				end
+			elseif parent:IsA("Attachment") then
+				promptPos = parent.WorldPosition
+			end
+			
+			if promptPos then
+				local dist = (promptPos - position).Magnitude
+				if dist < closestDistance then
+					closestDistance = dist
+					closestPrompt = obj
+				end
+			end
+		end
+	end
+	
+	return closestPrompt
 end
 
-local function watchWorkspace()
-    for _, desc in ipairs(Workspace:GetDescendants()) do
-        checkDescendant(desc)
-    end
-
-    Workspace.DescendantAdded:Connect(function(desc)
-        checkDescendant(desc)
-    end)
+local function fireProximityPrompt(prompt)
+	if prompt then
+		pcall(function()
+			if fireproximityprompt then
+				fireproximityprompt(prompt, 0, true)
+			elseif fire_proximity_prompt then
+				fire_proximity_prompt(prompt)
+			else
+				local oldHoldDuration = prompt.HoldDuration
+				prompt.HoldDuration = 0
+				prompt:InputHoldBegin()
+				task.wait(0.1)
+				prompt:InputHoldEnd()
+				prompt.HoldDuration = oldHoldDuration
+			end
+		end)
+	end
 end
 
-local function togglePaperESP()
-    paperESPEnabled = not paperESPEnabled
-    for obj, _ in pairs(espObjects) do
-        if obj:IsA("BasePart") and obj.Name == "Paper" then
-            removeESP(obj)
-        end
-    end
-    if paperESPEnabled then
-        for _, desc in ipairs(Workspace:GetDescendants()) do
-            checkDescendant(desc)
-        end
-    end
+local function startEnergyMonitoring()
+	if energyConnection then
+		task.cancel(energyConnection)
+	end
+	
+	energyConnection = task.spawn(function()
+		local energyBar = getEnergyBar()
+		while isRunning do
+			local energy = energyBar.Size.X.Scale
+			if energy <= 0 then
+				isRecharging = true
+				
+				local reachedPosition = false
+				local maxAttempts = 60
+				
+				for i = 1, maxAttempts do
+					local _, hum = getCharacter()
+					local char = player.Character
+					
+					if char and char:FindFirstChild("HumanoidRootPart") then
+						local dist = (char.HumanoidRootPart.Position - RESPAWN_POSITION).Magnitude
+						
+						if dist <= RESPAWN_RADIUS then
+							reachedPosition = true
+							break
+						else
+							hum:MoveTo(RESPAWN_POSITION)
+						end
+					end
+					
+					task.wait(0.5)
+				end
+				
+				if reachedPosition then
+					task.wait(2)
+					
+					local char = player.Character
+					if char and char:FindFirstChild("HumanoidRootPart") then
+						local prompt = findNearbyProximityPrompt(RESPAWN_POSITION, 15)
+						if prompt then
+							print("Found proximity prompt, firing...")
+							fireProximityPrompt(prompt)
+							task.wait(2)
+						else
+							print("No proximity prompt found near respawn position")
+						end
+					end
+				else
+					print("Failed to reach respawn position")
+				end
+				
+				isRecharging = false
+			end
+			task.wait(10)
+		end
+	end)
 end
 
-local function toggleMeteorESP()
-    meteorESPEnabled = not meteorESPEnabled
-    for obj, _ in pairs(espObjects) do
-        if obj:IsA("Model") and obj.Name == "Meteor" then
-            removeESP(obj)
-        end
-    end
-    if meteorESPEnabled then
-        for _, desc in ipairs(Workspace:GetDescendants()) do
-            checkDescendant(desc)
-        end
-    end
+local function startFacing()
+	if rotateConnection then rotateConnection:Disconnect() end
+
+	rotateConnection = RunService.RenderStepped:Connect(function(dt)
+		if not isRunning or not rootPart or isRecharging then return end
+
+		local dir = FACING_POSITION - rootPart.Position
+		local flat = Vector3.new(dir.X, 0, dir.Z)
+		if flat.Magnitude == 0 then return end
+
+		local targetCF = CFrame.new(rootPart.Position, rootPart.Position + flat)
+		local alpha = 1 - math.exp(-ROTATE_SPEED * dt)
+
+		rootPart.CFrame = rootPart.CFrame:Lerp(targetCF, alpha)
+	end)
 end
 
-local function safeTeleport(targetCFrame)
-    if not targetCFrame then return end
-    local distance = (HumanoidRootPart.Position - targetCFrame.Position).Magnitude
-    local tweenInfo = TweenInfo.new(distance / tweenSpeed, Enum.EasingStyle.Linear)
-    local tween = TweenService:Create(HumanoidRootPart, tweenInfo, {CFrame = targetCFrame})
-    tween:Play()
+local function stopFacing()
+	if rotateConnection then
+		rotateConnection:Disconnect()
+		rotateConnection = nil
+	end
 end
 
-local function teleportToPaper()
-    local nearest
-    local shortest = math.huge
-    for _, part in ipairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") and part.Name == "Paper"
-           and part.Transparency < 1 and part.CanCollide then
-            local distance = (HumanoidRootPart.Position - part.Position).Magnitude
-            if distance < shortest then
-                nearest = part
-                shortest = distance
-            end
-        end
-    end
-
-    if nearest then
-        safeTeleport(nearest.CFrame + Vector3.new(0,3,0))
-    end
+local function startNoclip()
+	if noclipConnection then
+		noclipConnection:Disconnect()
+	end
+	
+	noclipConnection = RunService.Stepped:Connect(function()
+		if character then
+			for _, part in pairs(character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CanCollide = false
+				end
+			end
+		end
+	end)
 end
 
-local function teleportToMeteor()
-    local nearestModel
-    local shortest = math.huge
-
-    for _, model in ipairs(Workspace:GetDescendants()) do
-        if model:IsA("Model") and model.Name == "Meteor" and model:IsDescendantOf(Workspace) then
-            local modelCFrame
-            if model.PrimaryPart then
-                modelCFrame = model:GetPrimaryPartCFrame()
-            else
-                local parts = {}
-                for _, p in ipairs(model:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        table.insert(parts, p.Position)
-                    end
-                end
-                if #parts == 0 then continue end
-                local sum = Vector3.new(0,0,0)
-                for _, pos in ipairs(parts) do
-                    sum = sum + pos
-                end
-                modelCFrame = CFrame.new(sum / #parts)
-            end
-
-            local distance = (HumanoidRootPart.Position - modelCFrame.Position).Magnitude
-            if distance < shortest then
-                nearestModel = model
-                shortest = distance
-            end
-        end
-    end
-
-    if nearestModel then
-        local targetCFrame
-        if nearestModel.PrimaryPart then
-            targetCFrame = nearestModel:GetPrimaryPartCFrame() + Vector3.new(0,3,0)
-        else
-            local parts = {}
-            for _, p in ipairs(nearestModel:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    table.insert(parts, p.Position)
-                end
-            end
-            local sum = Vector3.new(0,0,0)
-            for _, pos in ipairs(parts) do
-                sum = sum + pos
-            end
-            targetCFrame = CFrame.new(sum / #parts + Vector3.new(0,3,0))
-        end
-
-        safeTeleport(targetCFrame)
-    end
+local function stopNoclip()
+	if noclipConnection then
+		noclipConnection:Disconnect()
+		noclipConnection = nil
+	end
+	
+	if character then
+		for _, part in pairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = true
+			end
+		end
+	end
 end
 
---// MODERN GUI CREATION
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "ModernESPHub"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = CoreGui
+local function startHealthMonitor(model)
+	if healthConnection then
+		healthConnection:Disconnect()
+	end
 
--- Main Hub Frame
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainHub"
-MainFrame.Size = UDim2.new(0, 360, 0, 280)
-MainFrame.Position = UDim2.new(0.5, -180, 0.5, -140)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
+	local firedLow = false
+	local firedZero = false
 
-local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 12)
-MainCorner.Parent = MainFrame
+	local function checkHealth()
+		if not isRunning then return end
 
--- Gradient Effect
-local Gradient = Instance.new("UIGradient")
-Gradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 45)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 30))
-}
-Gradient.Rotation = 45
-Gradient.Parent = MainFrame
+		local health = model:GetAttribute("Health")
+		if not health then return end
 
--- Accent Line
-local AccentLine = Instance.new("Frame")
-AccentLine.Size = UDim2.new(1, 0, 0, 3)
-AccentLine.Position = UDim2.new(0, 0, 0, 0)
-AccentLine.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
-AccentLine.BorderSizePixel = 0
-AccentLine.Parent = MainFrame
+		if inPosition and health < 80 and not firedLow then
+			firedLow = true
+			promptPlayerLaunch:FireServer(1, player.Character)
+		end
 
-local LineCorner = Instance.new("UICorner")
-LineCorner.CornerRadius = UDim.new(0, 12)
-LineCorner.Parent = AccentLine
+		if health == 0 and not firedZero then
+			firedZero = true
+			promptPlayerLaunch:FireServer(1, player.Character)
+		end
 
--- Title
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -20, 0, 40)
-Title.Position = UDim2.new(0, 10, 0, 10)
-Title.BackgroundTransparency = 1
-Title.Text = "⚡ ESP HUB"
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 20
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = MainFrame
+		if health >= 80 then
+			firedLow = false
+		end
 
-local Version = Instance.new("TextLabel")
-Version.Size = UDim2.new(0, 60, 0, 20)
-Version.Position = UDim2.new(1, -70, 0, 15)
-Version.BackgroundTransparency = 1
-Version.Text = "v1.0"
-Version.Font = Enum.Font.Gotham
-Version.TextSize = 12
-Version.TextColor3 = Color3.fromRGB(150, 150, 150)
-Version.Parent = MainFrame
+		if health > 0 then
+			firedZero = false
+		end
 
--- Container for buttons
-local Container = Instance.new("Frame")
-Container.Size = UDim2.new(1, -20, 1, -60)
-Container.Position = UDim2.new(0, 10, 0, 50)
-Container.BackgroundTransparency = 1
-Container.Parent = MainFrame
+		if not inPosition then
+			firedLow = false
+		end
+	end
 
-local Layout = Instance.new("UIListLayout")
-Layout.Padding = UDim.new(0, 10)
-Layout.SortOrder = Enum.SortOrder.LayoutOrder
-Layout.Parent = Container
-
--- Function to create toggle button
-local function createToggleButton(name, icon, enabled, callback)
-    local Button = Instance.new("Frame")
-    Button.Size = UDim2.new(1, 0, 0, 45)
-    Button.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
-    Button.BorderSizePixel = 0
-    Button.Parent = Container
-
-    local ButtonCorner = Instance.new("UICorner")
-    ButtonCorner.CornerRadius = UDim.new(0, 8)
-    ButtonCorner.Parent = Button
-
-    local Label = Instance.new("TextLabel")
-    Label.Size = UDim2.new(1, -60, 1, 0)
-    Label.Position = UDim2.new(0, 10, 0, 0)
-    Label.BackgroundTransparency = 1
-    Label.Text = icon .. " " .. name
-    Label.Font = Enum.Font.GothamSemibold
-    Label.TextSize = 14
-    Label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.Parent = Button
-
-    local ToggleButton = Instance.new("TextButton")
-    ToggleButton.Size = UDim2.new(0, 50, 0, 26)
-    ToggleButton.Position = UDim2.new(1, -60, 0.5, -13)
-    ToggleButton.BackgroundColor3 = enabled and Color3.fromRGB(50, 200, 100) or Color3.fromRGB(60, 60, 75)
-    ToggleButton.BorderSizePixel = 0
-    ToggleButton.Text = ""
-    ToggleButton.Parent = Button
-
-    local ToggleCorner = Instance.new("UICorner")
-    ToggleCorner.CornerRadius = UDim.new(1, 0)
-    ToggleCorner.Parent = ToggleButton
-
-    local ToggleCircle = Instance.new("Frame")
-    ToggleCircle.Size = UDim2.new(0, 20, 0, 20)
-    ToggleCircle.Position = enabled and UDim2.new(1, -23, 0.5, -10) or UDim2.new(0, 3, 0.5, -10)
-    ToggleCircle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    ToggleCircle.BorderSizePixel = 0
-    ToggleCircle.Parent = ToggleButton
-
-    local CircleCorner = Instance.new("UICorner")
-    CircleCorner.CornerRadius = UDim.new(1, 0)
-    CircleCorner.Parent = ToggleCircle
-
-    local isEnabled = enabled
-
-    ToggleButton.MouseButton1Click:Connect(function()
-        isEnabled = not isEnabled
-        callback()
-        
-        local bgColor = isEnabled and Color3.fromRGB(50, 200, 100) or Color3.fromRGB(60, 60, 75)
-        local position = isEnabled and UDim2.new(1, -23, 0.5, -10) or UDim2.new(0, 3, 0.5, -10)
-        
-        TweenService:Create(ToggleButton, TweenInfo.new(0.2), {BackgroundColor3 = bgColor}):Play()
-        TweenService:Create(ToggleCircle, TweenInfo.new(0.2), {Position = position}):Play()
-    end)
-
-    return Button
+	checkHealth()
+	healthConnection = model:GetAttributeChangedSignal("Health"):Connect(checkHealth)
 end
 
--- Function to create action button
-local function createActionButton(name, icon, callback)
-    local Button = Instance.new("TextButton")
-    Button.Size = UDim2.new(1, 0, 0, 45)
-    Button.BackgroundColor3 = Color3.fromRGB(45, 45, 65)
-    Button.BorderSizePixel = 0
-    Button.Text = icon .. " " .. name
-    Button.Font = Enum.Font.GothamBold
-    Button.TextSize = 14
-    Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Button.Parent = Container
+local function watchModels()
+	if modelConnection then
+		modelConnection:Disconnect()
+	end
 
-    local ButtonCorner = Instance.new("UICorner")
-    ButtonCorner.CornerRadius = UDim.new(0, 8)
-    ButtonCorner.Parent = Button
+	local id = tostring(player.UserId)
 
-    Button.MouseEnter:Connect(function()
-        TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(60, 60, 85)}):Play()
-    end)
+	local existing = topsFolder:FindFirstChild(id)
+	if existing then
+		startHealthMonitor(existing)
+	end
 
-    Button.MouseLeave:Connect(function()
-        TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(45, 45, 65)}):Play()
-    end)
-
-    Button.MouseButton1Click:Connect(callback)
-
-    return Button
+	modelConnection = topsFolder.ChildAdded:Connect(function(child)
+		if child.Name == id then
+			startHealthMonitor(child)
+		end
+	end)
 end
 
--- Create all buttons
-createToggleButton("Paper ESP", "📄", paperESPEnabled, togglePaperESP)
-createToggleButton("Meteor ESP", "☄️", meteorESPEnabled, toggleMeteorESP)
-createActionButton("Teleport to Paper", "🔹", teleportToPaper)
-createActionButton("Teleport to Meteor", "🔸", teleportToMeteor)
+local function startMovement()
+	task.spawn(function()
+		while isRunning do
+			if humanoid and rootPart and not isUnstucking and not isRecharging then
+				local dist = (rootPart.Position - TARGET_POSITION).Magnitude
 
--- Toggle Hub Button (floating)
-local ToggleHubButton = Instance.new("TextButton")
-ToggleHubButton.Name = "ToggleHub"
-ToggleHubButton.Size = UDim2.new(0, 55, 0, 55)
-ToggleHubButton.Position = UDim2.new(0, 20, 0, 20)
-ToggleHubButton.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
-ToggleHubButton.BorderSizePixel = 0
-ToggleHubButton.Text = "⚡"
-ToggleHubButton.Font = Enum.Font.GothamBold
-ToggleHubButton.TextSize = 24
-ToggleHubButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleHubButton.Parent = ScreenGui
-ToggleHubButton.Active = true
-ToggleHubButton.Draggable = true
+				if dist > POSITION_RADIUS then
+					inPosition = false
+					humanoid:MoveTo(TARGET_POSITION)
+				else
+					inPosition = true
 
-local HubButtonCorner = Instance.new("UICorner")
-HubButtonCorner.CornerRadius = UDim.new(1, 0)
-HubButtonCorner.Parent = ToggleHubButton
+					if not initialFired then
+						initialFired = true
+						promptPlayerLaunch:FireServer(1, player.Character)
+					end
+				end
+			end
+			task.wait(MOVE_RATE)
+		end
+	end)
+	
+	task.spawn(function()
+		while isRunning do
+			task.wait(STUCK_CHECK_INTERVAL)
+			
+			if rootPart and humanoid and not isUnstucking and not isRecharging then
+				local currentPos = rootPart.Position
+				local currentTime = tick()
+				
+				if lastPosition then
+					local distMoved = (currentPos - lastPosition).Magnitude
+					local timeDiff = currentTime - lastMoveTime
+					
+					if distMoved < STUCK_DISTANCE_THRESHOLD and timeDiff >= STUCK_CHECK_INTERVAL then
+						local distToTarget = (currentPos - TARGET_POSITION).Magnitude
+						
+						if distToTarget > POSITION_RADIUS then
+							isUnstucking = true
+							
+							humanoid:Move(Vector3.new(0, 0, 0))
+							task.wait(0.1)
+							
+							local dirToTarget = (TARGET_POSITION - currentPos).Unit
+							local rightVector = Vector3.new(-dirToTarget.Z, 0, dirToTarget.X)
+							local leftVector = Vector3.new(dirToTarget.Z, 0, -dirToTarget.X)
+							local sideVector = math.random() > 0.5 and rightVector or leftVector
+							local sidePosition = currentPos + (sideVector * UNSTUCK_OFFSET_DISTANCE)
+							
+							humanoid:MoveTo(sidePosition)
+							task.wait(1.5)
+							
+							isUnstucking = false
+						end
+					end
+				end
+				
+				lastPosition = currentPos
+				lastMoveTime = currentTime
+			end
+		end
+	end)
+end
 
-local HubButtonShadow = Instance.new("ImageLabel")
-HubButtonShadow.Size = UDim2.new(1, 10, 1, 10)
-HubButtonShadow.Position = UDim2.new(0, -5, 0, -5)
-HubButtonShadow.BackgroundTransparency = 1
-HubButtonShadow.Image = "rbxasset://textures/ui/GuiImagePlaceholder.png"
-HubButtonShadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
-HubButtonShadow.ImageTransparency = 0.7
-HubButtonShadow.ZIndex = 0
-HubButtonShadow.Parent = ToggleHubButton
+local function start()
+	if isRunning then return end
+	isRunning = true
 
-ToggleHubButton.MouseButton1Click:Connect(function()
-    MainFrame.Visible = not MainFrame.Visible
-    
-    if MainFrame.Visible then
-        MainFrame.Size = UDim2.new(0, 0, 0, 0)
-        TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
-            Size = UDim2.new(0, 360, 0, 280)
-        }):Play()
-    end
+	button.Text = "STOP"
+	button.BackgroundColor3 = Color3.fromRGB(40, 167, 69)
+
+	startFacing()
+	startMovement()
+	watchModels()
+	startEnergyMonitoring()
+	startNoclip()
+end
+
+local function stop()
+	isRunning = false
+
+	button.Text = "START"
+	button.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+
+	stopFacing()
+	stopNoclip()
+	
+	lastPosition = nil
+	lastMoveTime = 0
+	isUnstucking = false
+	isRecharging = false
+
+	if healthConnection then
+		healthConnection:Disconnect()
+		healthConnection = nil
+	end
+
+	if modelConnection then
+		modelConnection:Disconnect()
+		modelConnection = nil
+	end
+	
+	if energyConnection then
+		task.cancel(energyConnection)
+		energyConnection = nil
+	end
+end
+
+button.MouseButton1Click:Connect(function()
+	if isRunning then
+		stop()
+	else
+		start()
+	end
 end)
 
-ToggleHubButton.MouseEnter:Connect(function()
-    TweenService:Create(ToggleHubButton, TweenInfo.new(0.2), {
-        Size = UDim2.new(0, 60, 0, 60),
-        BackgroundColor3 = Color3.fromRGB(120, 170, 255)
-    }):Play()
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	
+	if input.KeyCode == Enum.KeyCode.O then
+		if isRunning then
+			stop()
+		else
+			start()
+		end
+	end
 end)
-
-ToggleHubButton.MouseLeave:Connect(function()
-    TweenService:Create(ToggleHubButton, TweenInfo.new(0.2), {
-        Size = UDim2.new(0, 55, 0, 55),
-        BackgroundColor3 = Color3.fromRGB(100, 150, 255)
-    }):Play()
-end)
-
--- Initial animation
-MainFrame.Size = UDim2.new(0, 0, 0, 0)
-MainFrame.Visible = true
-TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back), {
-    Size = UDim2.new(0, 360, 0, 280)
-}):Play()
-
--- Cleanup and start
-RunService.RenderStepped:Connect(cleanup)
-watchWorkspace()
-
-print("Modern ESP Hub loaded successfully!")
+]])()
