@@ -1,0 +1,295 @@
+--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+
+--// PLAYER & CAMERA
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+--// SETTINGS
+local ZOMBIE_FOLDER_NAME = "Zombies"
+local MAX_LOCK_DISTANCE = 500
+
+local AIM_ENABLED = false
+local FOV_ENABLED = true
+local GUI_VISIBLE = true
+
+local FOV_RADIUS = 150
+local SMOOTHNESS  = 0.15
+local ACCENT_COLOR = Color3.fromRGB(0, 255, 170)
+
+----------------------------------------------------------
+-- GUI ROOT
+----------------------------------------------------------
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.ResetOnSpawn = false
+
+-- OPEN BUTTON
+local openBtn = Instance.new("TextButton", gui)
+openBtn.Size = UDim2.new(0, 90, 0, 35)
+openBtn.Position = UDim2.new(0.02, 0, 0.45, 0)
+openBtn.Text = "MENU"
+openBtn.TextScaled = true
+openBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+openBtn.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", openBtn)
+
+----------------------------------------------------------
+-- HUB
+----------------------------------------------------------
+local hub = Instance.new("Frame", gui)
+hub.Size = UDim2.new(0, 230, 0, 300) -- ✅ taller for sliders
+hub.Position = UDim2.new(0.08, 0, 0.5, -150)
+hub.BackgroundColor3 = Color3.fromRGB(20,20,20)
+hub.BorderSizePixel = 0
+hub.Visible = true
+Instance.new("UICorner", hub)
+
+openBtn.MouseButton1Click:Connect(function()
+	GUI_VISIBLE = not GUI_VISIBLE
+	hub.Visible = GUI_VISIBLE
+end)
+
+----------------------------------------------------------
+-- TITLE BAR (DRAG)
+----------------------------------------------------------
+local titleBar = Instance.new("Frame", hub)
+titleBar.Size = UDim2.new(1, 0, 0, 35)
+titleBar.BackgroundColor3 = Color3.fromRGB(30,30,30)
+
+local title = Instance.new("TextLabel", titleBar)
+title.Size = UDim2.new(1, 0, 1, 0)
+title.Text = "AIM HUB"
+title.TextScaled = true
+title.TextColor3 = ACCENT_COLOR
+title.BackgroundTransparency = 1
+
+local dragging = false
+local dragStart, startPos
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = hub.Position
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.Touch then
+		local delta = input.Position - dragStart
+		hub.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+----------------------------------------------------------
+-- BUTTON CREATOR
+----------------------------------------------------------
+local function makeButton(text, y)
+	local btn = Instance.new("TextButton", hub)
+	btn.Size = UDim2.new(1, -20, 0, 32)
+	btn.Position = UDim2.new(0, 10, 0, y)
+	btn.Text = text
+	btn.TextScaled = true
+	btn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+	btn.TextColor3 = Color3.new(1,1,1)
+	Instance.new("UICorner", btn)
+	return btn
+end
+
+----------------------------------------------------------
+-- SLIDER CREATOR
+----------------------------------------------------------
+local function makeSlider(labelText, y)
+	local label = Instance.new("TextLabel", hub)
+	label.Size = UDim2.new(1, -20, 0, 20)
+	label.Position = UDim2.new(0, 10, 0, y)
+	label.Text = labelText
+	label.TextScaled = true
+	label.TextColor3 = Color3.new(1,1,1)
+	label.BackgroundTransparency = 1
+
+	local bar = Instance.new("Frame", hub)
+	bar.Size = UDim2.new(1, -20, 0, 8)
+	bar.Position = UDim2.new(0, 10, 0, y + 22)
+	bar.BackgroundColor3 = Color3.fromRGB(80,80,80)
+	Instance.new("UICorner", bar)
+
+	local fill = Instance.new("Frame", bar)
+	fill.Size = UDim2.new(0.5, 0, 1, 0)
+	fill.BackgroundColor3 = ACCENT_COLOR
+	Instance.new("UICorner", fill)
+
+	return bar, fill
+end
+
+----------------------------------------------------------
+-- AIM TOGGLE
+----------------------------------------------------------
+local aimBtn = makeButton("AIM: OFF", 45)
+aimBtn.MouseButton1Click:Connect(function()
+	AIM_ENABLED = not AIM_ENABLED
+	if AIM_ENABLED then
+		aimBtn.Text = "AIM: ON"
+		aimBtn.BackgroundColor3 = Color3.fromRGB(0,180,120)
+	else
+		aimBtn.Text = "AIM: OFF"
+		aimBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+	end
+end)
+
+----------------------------------------------------------
+-- FOV TOGGLE
+----------------------------------------------------------
+local fovBtn = makeButton("FOV: ON", 85)
+fovBtn.MouseButton1Click:Connect(function()
+	FOV_ENABLED = not FOV_ENABLED
+	fovBtn.Text = FOV_ENABLED and "FOV: ON" or "FOV: OFF"
+end)
+
+----------------------------------------------------------
+-- ✅ FOV SIZE SLIDER
+----------------------------------------------------------
+local fovBar, fovFill = makeSlider("FOV SIZE", 130)
+
+----------------------------------------------------------
+-- ✅ SMOOTHNESS SLIDER
+----------------------------------------------------------
+local smoothBar, smoothFill = makeSlider("SMOOTHNESS", 185)
+
+----------------------------------------------------------
+-- SLIDER TOUCH HANDLING
+----------------------------------------------------------
+local activeSlider = nil
+
+local function hookSlider(bar, fill, minVal, maxVal, onChange)
+	bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			activeSlider = {bar = bar, fill = fill, minVal = minVal, maxVal = maxVal, onChange = onChange}
+		end
+	end)
+end
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		activeSlider = nil
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if activeSlider and input.UserInputType == Enum.UserInputType.Touch then
+		local bar = activeSlider.bar
+		local fill = activeSlider.fill
+		local minVal = activeSlider.minVal
+		local maxVal = activeSlider.maxVal
+		local onChange = activeSlider.onChange
+
+		local alpha = math.clamp(
+			(input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X,
+			0, 1
+		)
+
+		fill.Size = UDim2.new(alpha, 0, 1, 0)
+		local value = minVal + (maxVal - minVal) * alpha
+		onChange(value)
+	end
+end)
+
+hookSlider(fovBar, fovFill, 60, 400, function(v) FOV_RADIUS = v end)
+hookSlider(smoothBar, smoothFill, 0.05, 0.6, function(v) SMOOTHNESS = v end)
+
+----------------------------------------------------------
+-- FOV CIRCLE
+----------------------------------------------------------
+local fovCircle = Instance.new("Frame", gui)
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.BackgroundTransparency = 1
+Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1,0)
+
+local stroke = Instance.new("UIStroke", fovCircle)
+stroke.Thickness = 2
+stroke.Color = Color3.new(1,1,1)
+
+----------------------------------------------------------
+-- AIM LOGIC
+----------------------------------------------------------
+local function hasLineOfSight(target)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {player.Character}
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+
+	local result = Workspace:Raycast(
+		camera.CFrame.Position,
+		target.Position - camera.CFrame.Position,
+		params
+	)
+
+	return result and result.Instance:IsDescendantOf(target.Parent)
+end
+
+local function getClosestZombieInFOV()
+	if not FOV_ENABLED then return nil end
+
+	local folder = Workspace:FindFirstChild(ZOMBIE_FOLDER_NAME)
+	if not folder then return nil end
+
+	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+	local closest, shortest = nil, FOV_RADIUS
+
+	for _, zombie in ipairs(folder:GetChildren()) do
+		local head = zombie:FindFirstChild("Head")
+		local hum = zombie:FindFirstChildOfClass("Humanoid")
+
+		if head and hum and hum.Health > 0 then
+			local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+			if onScreen then
+				local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+				local realDist = (camera.CFrame.Position - head.Position).Magnitude
+
+				if dist < shortest and realDist < MAX_LOCK_DISTANCE and hasLineOfSight(head) then
+					shortest = dist
+					closest = head
+				end
+			end
+		end
+	end
+
+	return closest
+end
+
+----------------------------------------------------------
+-- MAIN LOOP
+----------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	fovCircle.Visible = FOV_ENABLED
+	fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+	fovCircle.Size = UDim2.new(0, FOV_RADIUS * 2, 0, FOV_RADIUS * 2)
+
+	if not AIM_ENABLED then return end
+
+	local target = getClosestZombieInFOV()
+
+	if target then
+		stroke.Color = ACCENT_COLOR
+		local camPos = camera.CFrame.Position
+		camera.CFrame = camera.CFrame:Lerp(
+			CFrame.new(camPos, target.Position),
+			SMOOTHNESS
+		)
+	else
+		stroke.Color = Color3.new(1,1,1)
+	end
+end)
