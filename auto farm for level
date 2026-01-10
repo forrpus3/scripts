@@ -176,7 +176,11 @@ local function startEnergyMonitoring()
 		while isRunning do
 			local energy = energyBar.Size.X.Scale
 			if energy <= 0 then
+				print("Energy depleted, starting recharge sequence...")
 				isRecharging = true
+				
+				-- Reset the initialFired flag so it will fire again after recharging
+				initialFired = false
 				
 				local reachedPosition = false
 				local maxAttempts = 60
@@ -190,6 +194,7 @@ local function startEnergyMonitoring()
 						
 						if dist <= RESPAWN_RADIUS then
 							reachedPosition = true
+							print("Reached respawn position")
 							break
 						else
 							hum:MoveTo(RESPAWN_POSITION)
@@ -208,7 +213,22 @@ local function startEnergyMonitoring()
 						if prompt then
 							print("Found proximity prompt, firing...")
 							fireProximityPrompt(prompt)
-							task.wait(2)
+							
+							-- Wait for energy to recharge after proximity prompt fires
+							print("Waiting for energy to recharge...")
+							task.wait(3) -- Wait a bit for the prompt to complete
+							
+							local recheckCount = 0
+							while energyBar.Size.X.Scale <= 0 and recheckCount < 120 do
+								task.wait(1)
+								recheckCount = recheckCount + 1
+							end
+							
+							if energyBar.Size.X.Scale > 0 then
+								print("Energy recharged! Moving back to launch position...")
+							else
+								print("Energy recharge timeout, moving back anyway")
+							end
 						else
 							print("No proximity prompt found near respawn position")
 						end
@@ -217,7 +237,9 @@ local function startEnergyMonitoring()
 					print("Failed to reach respawn position")
 				end
 				
+				-- End recharging state so movement can resume
 				isRecharging = false
+				print("Recharge sequence complete, resuming normal operation")
 			end
 			task.wait(10)
 		end
@@ -353,6 +375,7 @@ local function startMovement()
 
 					if not initialFired then
 						initialFired = true
+						print("Firing initial remote at target position")
 						promptPlayerLaunch:FireServer(1, player.Character)
 					end
 				end
