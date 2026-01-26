@@ -1,0 +1,1002 @@
+-- Item & Player ESP System with X-Ray Vision and Aimbot
+-- Place this in StarterPlayer > StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+
+-- Configuration
+local ITEM_HIGHLIGHT_COLOR = Color3.fromRGB(255, 255, 0) -- Yellow
+local ITEM_OUTLINE_COLOR = Color3.fromRGB(255, 200, 0) -- Orange outline
+local OUTLINE_TRANSPARENCY = 0
+local FILL_TRANSPARENCY = 0.5
+local LABEL_COLOR = Color3.fromRGB(255, 255, 255) -- White text
+local LABEL_STROKE_COLOR = Color3.fromRGB(0, 0, 0) -- Black outline
+local MAX_DISTANCE = 500 -- Maximum distance in studs
+local XRAY_TRANSPARENCY = 0.7 -- Transparency when X-ray is on
+local AIMBOT_FOV = 300 -- Field of view for aimbot target acquisition (pixels)
+local AIMBOT_SMOOTHNESS = 0.5 -- 0 = instant lock, 1 = very smooth (0-1 range)
+
+-- ESP State
+local itemEspEnabled = true
+local playerEspEnabled = true
+local xrayEnabled = false
+local aimbotEnabled = false
+local fovCircleEnabled = false
+local itemHighlights = {}
+local itemBillboards = {}
+local playerHighlights = {}
+local playerBillboards = {}
+local originalTransparencies = {}
+
+-- Aimbot variables
+local camera = workspace.CurrentCamera
+local lockedTarget = nil
+local fovCircle = nil
+
+-- Function to create FOV circle
+local function createFOVCircle()
+	if fovCircle then return end
+	
+	local screenGui = player.PlayerGui:FindFirstChild("ESP_GUI")
+	if not screenGui then return end
+	
+	fovCircle = Drawing.new("Circle")
+	fovCircle.Thickness = 2
+	fovCircle.NumSides = 64
+	fovCircle.Radius = AIMBOT_FOV
+	fovCircle.Filled = false
+	fovCircle.Visible = fovCircleEnabled
+	fovCircle.Color = Color3.fromRGB(100, 200, 255)
+	fovCircle.Transparency = 0.8
+	
+	return fovCircle
+end
+
+-- Function to update FOV circle position
+local function updateFOVCircle()
+	if not fovCircle then return end
+	
+	local screenSize = camera.ViewportSize
+	fovCircle.Position = Vector2.new(screenSize.X / 2, screenSize.Y / 2)
+	fovCircle.Visible = fovCircleEnabled and aimbotEnabled
+end
+
+-- Function to remove FOV circle
+local function removeFOVCircle()
+	if fovCircle then
+		fovCircle:Remove()
+		fovCircle = nil
+	end
+end
+
+-- Function to check if player should be highlighted
+local function shouldHighlightPlayer(plr)
+	if plr == player then return false end -- Don't highlight yourself
+	
+	-- If no team system, highlight all players
+	if not plr.Team then return true end
+	
+	local teamName = plr.Team.Name
+	if teamName == "Lobby" or teamName == "FFA" then
+		return false -- Don't highlight Lobby or FFA teams
+	end
+	
+	-- Don't highlight same team
+	if player.Team and plr.Team == player.Team then
+		return false
+	end
+	
+	return true
+end
+
+-- Function to get player position
+local function getPlayerPosition()
+	local character = player.Character
+	if character and character:FindFirstChild("HumanoidRootPart") then
+		return character.HumanoidRootPart.Position
+	end
+	return nil
+end
+
+-- Function to get model position
+local function getModelPosition(model)
+	local primaryPart = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+	if primaryPart then
+		return primaryPart.Position
+	end
+	return nil
+end
+
+-- Function to check if model is within range
+local function isWithinRange(model)
+	local playerPos = getPlayerPosition()
+	local modelPos = getModelPosition(model)
+	
+	if playerPos and modelPos then
+		local distance = (playerPos - modelPos).Magnitude
+		return distance <= MAX_DISTANCE
+	end
+	return false
+end
+
+-- =====================
+-- MOBILE SOFT-LOCK AIMBOT (FIXED)
+-- =====================
+local SWITCH_DOT_THRESHOLD = 0.98 -- lower = easier switching on mobile
+
+local function shouldTarget(plr)
+	if plr == player then return false end
+	if not plr.Character then return false end
+	if player.Team and plr.Team == player.Team then return false end
+	return true
+end
+
+local function getClosestPlayerToCrosshair()
+	local closestChar = nil
+	local shortest = math.huge
+	local screenCenter = camera.ViewportSize / 2
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if shouldTarget(plr) then
+			local char = plr.Character
+			local head = char and char:FindFirstChild("Head")
+			local humanoid = char and char:FindFirstChild("Humanoid")
+			if head and humanoid and humanoid.Health > 0 then
+				local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+				if onScreen and screenPos.Z > 0 then
+					local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+					if dist < shortest and dist < AIMBOT_FOV then
+						shortest = dist
+						closestChar = char
+					end
+				end
+			end
+		end
+	end
+	return closestChar
+end
+
+local function updateAimbot()
+	if not aimbotEnabled then
+		lockedTarget = nil
+		return
+	end
+	-- Break lock when player swipes camera away (MOBILE)
+	if lockedTarget then
+		local head = lockedTarget:FindFirstChild("Head")
+		if not head then
+			lockedTarget = nil
+		else
+			local camPos = camera.CFrame.Position
+			local camLook = camera.CFrame.LookVector
+			local targetDir = (head.Position - camPos).Unit
+			if camLook:Dot(targetDir) < SWITCH_DOT_THRESHOLD then
+				lockedTarget = nil
+			end
+		end
+	end
+	-- Always re-acquire whoever you're aiming at
+	lockedTarget = getClosestPlayerToCrosshair()
+	-- Aim smoothly
+	if lockedTarget then
+		local head = lockedTarget:FindFirstChild("Head")
+		if head then
+			local camPos = camera.CFrame.Position
+			local currentDir = camera.CFrame.LookVector
+			local targetDir = (head.Position - camPos).Unit
+			local alpha = math.clamp(AIMBOT_SMOOTHNESS * 0.2, 0.03, 0.15)
+			local smoothDir = currentDir:Lerp(targetDir, alpha)
+			camera.CFrame = CFrame.new(camPos, camPos + smoothDir)
+		end
+	end
+end
+
+local function applyXRay()
+	for _, obj in pairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			-- Skip player characters and items
+			local isPlayerPart = false
+			local ancestor = obj.Parent
+			while ancestor do
+				if ancestor:IsA("Model") and Players:GetPlayerFromCharacter(ancestor) then
+					isPlayerPart = true
+					break
+				end
+				if ancestor.Name == "ItemSpawns" then
+					isPlayerPart = true
+					break
+				end
+				ancestor = ancestor.Parent
+			end
+			
+			if not isPlayerPart and obj.Transparency < 1 then
+				if not originalTransparencies[obj] then
+					originalTransparencies[obj] = obj.Transparency
+				end
+				obj.Transparency = XRAY_TRANSPARENCY
+			end
+		end
+	end
+end
+
+local function removeXRay()
+	for obj, originalTrans in pairs(originalTransparencies) do
+		if obj and obj.Parent then
+			obj.Transparency = originalTrans
+		end
+	end
+	originalTransparencies = {}
+end
+
+-- Function to make GUI draggable with animation
+local function makeDraggable(frame)
+	local dragging
+	local dragInput
+	local dragStart
+	local startPos
+	local originalSize = frame.Size
+	
+	local function update(input)
+		local delta = input.Position - dragStart
+		frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
+	
+	frame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+			
+			-- Scale down animation when dragging starts
+			TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Size = UDim2.new(originalSize.X.Scale * 0.95, originalSize.X.Offset * 0.95, originalSize.Y.Scale * 0.95, originalSize.Y.Offset * 0.95)
+			}):Play()
+			
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					-- Scale back to original when drag ends
+					TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+						Size = originalSize
+					}):Play()
+				end
+			end)
+		end
+	end)
+	
+	frame.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+	
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			update(input)
+		end
+	end)
+end
+
+-- Function to animate button
+local function animateButton(button)
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, 119, 0, 27),
+			Position = UDim2.new(0.5, -59.5, button.Position.Y.Scale, button.Position.Y.Offset)
+		}):Play()
+	end)
+	
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, 112, 0, 25),
+			Position = UDim2.new(0.5, -56, button.Position.Y.Scale, button.Position.Y.Offset)
+		}):Play()
+	end)
+	
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, 108, 0, 23)
+		}):Play()
+	end)
+	
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, 119, 0, 27)
+		}):Play()
+	end)
+end
+
+-- Create GUI
+local function createGUI()
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "ESP_GUI"
+	screenGui.ResetOnSpawn = false
+	screenGui.Parent = player:WaitForChild("PlayerGui")
+	
+	-- Main Frame
+	local frame = Instance.new("Frame")
+	frame.Name = "MainFrame"
+	frame.Size = UDim2.new(0, 154, 0, 260)
+	frame.Position = UDim2.new(0, 10, 0.5, -130)
+	frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+	frame.BorderSizePixel = 0
+	frame.BackgroundTransparency = 0.1
+	frame.Parent = screenGui
+	
+	-- Drop shadow
+	local shadow = Instance.new("ImageLabel")
+	shadow.Name = "Shadow"
+	shadow.Size = UDim2.new(1, 30, 1, 30)
+	shadow.Position = UDim2.new(0, -15, 0, -15)
+	shadow.BackgroundTransparency = 1
+	shadow.Image = "rbxasset://textures/ui/GuiImagePlaceholder.png"
+	shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+	shadow.ImageTransparency = 0.5
+	shadow.ScaleType = Enum.ScaleType.Slice
+	shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+	shadow.ZIndex = 0
+	shadow.Parent = frame
+	
+	-- Make draggable
+	makeDraggable(frame)
+	
+	-- Corner
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = frame
+	
+	-- Accent bar at top
+	local accentBar = Instance.new("Frame")
+	accentBar.Name = "AccentBar"
+	accentBar.Size = UDim2.new(1, 0, 0, 4)
+	accentBar.Position = UDim2.new(0, 0, 0, 0)
+	accentBar.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+	accentBar.BorderSizePixel = 0
+	accentBar.Parent = frame
+	
+	local accentCorner = Instance.new("UICorner")
+	accentCorner.CornerRadius = UDim.new(0, 12)
+	accentCorner.Parent = accentBar
+	
+	-- Title
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0, 25)
+	title.Position = UDim2.new(0, 0, 0, 3)
+	title.BackgroundTransparency = 1
+	title.Text = "⚡ ESP SYSTEM"
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	title.TextSize = 13
+	title.Font = Enum.Font.GothamBold
+	title.Parent = frame
+	
+	-- Subtitle
+	local subtitle = Instance.new("TextLabel")
+	subtitle.Name = "Subtitle"
+	subtitle.Size = UDim2.new(1, 0, 0, 12)
+	subtitle.Position = UDim2.new(0, 0, 0, 21)
+	subtitle.BackgroundTransparency = 1
+	subtitle.Text = "Advanced Vision Tools"
+	subtitle.TextColor3 = Color3.fromRGB(150, 150, 150)
+	subtitle.TextSize = 7
+	subtitle.Font = Enum.Font.Gotham
+	subtitle.Parent = frame
+	
+	-- Item ESP Toggle Button
+	local itemToggle = Instance.new("TextButton")
+	itemToggle.Name = "ItemToggle"
+	itemToggle.Size = UDim2.new(0, 112, 0, 25)
+	itemToggle.Position = UDim2.new(0.5, -56, 0, 35)
+	itemToggle.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+	itemToggle.BorderSizePixel = 0
+	itemToggle.Text = "✓ Item ESP"
+	itemToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	itemToggle.TextSize = 10
+	itemToggle.Font = Enum.Font.GothamBold
+	itemToggle.Parent = frame
+	
+	local itemCorner = Instance.new("UICorner")
+	itemCorner.CornerRadius = UDim.new(0, 6)
+	itemCorner.Parent = itemToggle
+	
+	animateButton(itemToggle)
+	
+	-- Player ESP Toggle Button
+	local playerToggle = Instance.new("TextButton")
+	playerToggle.Name = "PlayerToggle"
+	playerToggle.Size = UDim2.new(0, 112, 0, 25)
+	playerToggle.Position = UDim2.new(0.5, -56, 0, 67)
+	playerToggle.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+	playerToggle.BorderSizePixel = 0
+	playerToggle.Text = "✓ Player ESP"
+	playerToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	playerToggle.TextSize = 10
+	playerToggle.Font = Enum.Font.GothamBold
+	playerToggle.Parent = frame
+	
+	local playerCorner = Instance.new("UICorner")
+	playerCorner.CornerRadius = UDim.new(0, 6)
+	playerCorner.Parent = playerToggle
+	
+	animateButton(playerToggle)
+	
+	-- X-Ray Toggle Button
+	local xrayToggle = Instance.new("TextButton")
+	xrayToggle.Name = "XRayToggle"
+	xrayToggle.Size = UDim2.new(0, 112, 0, 25)
+	xrayToggle.Position = UDim2.new(0.5, -56, 0, 99)
+	xrayToggle.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+	xrayToggle.BorderSizePixel = 0
+	xrayToggle.Text = "✕ X-Ray"
+	xrayToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	xrayToggle.TextSize = 10
+	xrayToggle.Font = Enum.Font.GothamBold
+	xrayToggle.Parent = frame
+	
+	local xrayCorner = Instance.new("UICorner")
+	xrayCorner.CornerRadius = UDim.new(0, 6)
+	xrayCorner.Parent = xrayToggle
+	
+	animateButton(xrayToggle)
+	
+	-- Aimbot Toggle Button
+	local aimbotToggle = Instance.new("TextButton")
+	aimbotToggle.Name = "AimbotToggle"
+	aimbotToggle.Size = UDim2.new(0, 112, 0, 25)
+	aimbotToggle.Position = UDim2.new(0.5, -56, 0, 131)
+	aimbotToggle.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+	aimbotToggle.BorderSizePixel = 0
+	aimbotToggle.Text = "✕ Aimbot"
+	aimbotToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	aimbotToggle.TextSize = 10
+	aimbotToggle.Font = Enum.Font.GothamBold
+	aimbotToggle.Parent = frame
+	
+	local aimbotCorner = Instance.new("UICorner")
+	aimbotCorner.CornerRadius = UDim.new(0, 6)
+	aimbotCorner.Parent = aimbotToggle
+	
+	animateButton(aimbotToggle)
+	
+	-- FOV Circle Toggle Button
+	local fovToggle = Instance.new("TextButton")
+	fovToggle.Name = "FOVToggle"
+	fovToggle.Size = UDim2.new(0, 112, 0, 25)
+	fovToggle.Position = UDim2.new(0.5, -56, 0, 163)
+	fovToggle.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+	fovToggle.BorderSizePixel = 0
+	fovToggle.Text = "✕ FOV Circle"
+	fovToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	fovToggle.TextSize = 10
+	fovToggle.Font = Enum.Font.GothamBold
+	fovToggle.Parent = frame
+	
+	local fovCorner = Instance.new("UICorner")
+	fovCorner.CornerRadius = UDim.new(0, 6)
+	fovCorner.Parent = fovToggle
+	
+	animateButton(fovToggle)
+	
+	-- Smoothness Slider Container
+	local smoothnessContainer = Instance.new("Frame")
+	smoothnessContainer.Name = "SmoothnessContainer"
+	smoothnessContainer.Size = UDim2.new(0, 132, 0, 50)
+	smoothnessContainer.Position = UDim2.new(0.5, -66, 0, 195)
+	smoothnessContainer.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+	smoothnessContainer.BorderSizePixel = 0
+	smoothnessContainer.Parent = frame
+	
+	local smoothnessCorner = Instance.new("UICorner")
+	smoothnessCorner.CornerRadius = UDim.new(0, 8)
+	smoothnessCorner.Parent = smoothnessContainer
+	
+	-- Smoothness Label
+	local smoothnessLabel = Instance.new("TextLabel")
+	smoothnessLabel.Size = UDim2.new(1, 0, 0, 15)
+	smoothnessLabel.Position = UDim2.new(0, 0, 0, 3)
+	smoothnessLabel.BackgroundTransparency = 1
+	smoothnessLabel.Text = "Smoothness: 50%"
+	smoothnessLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+	smoothnessLabel.TextSize = 9
+	smoothnessLabel.Font = Enum.Font.GothamBold
+	smoothnessLabel.Parent = smoothnessContainer
+	
+	-- Slider Background
+	local sliderBg = Instance.new("Frame")
+	sliderBg.Name = "SliderBg"
+	sliderBg.Size = UDim2.new(0, 112, 0, 6)
+	sliderBg.Position = UDim2.new(0.5, -56, 0, 27)
+	sliderBg.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+	sliderBg.BorderSizePixel = 0
+	sliderBg.Parent = smoothnessContainer
+	
+	local sliderBgCorner = Instance.new("UICorner")
+	sliderBgCorner.CornerRadius = UDim.new(1, 0)
+	sliderBgCorner.Parent = sliderBg
+	
+	-- Slider Fill
+	local sliderFill = Instance.new("Frame")
+	sliderFill.Name = "SliderFill"
+	sliderFill.Size = UDim2.new(AIMBOT_SMOOTHNESS, 0, 1, 0)
+	sliderFill.Position = UDim2.new(0, 0, 0, 0)
+	sliderFill.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+	sliderFill.BorderSizePixel = 0
+	sliderFill.Parent = sliderBg
+	
+	local sliderFillCorner = Instance.new("UICorner")
+	sliderFillCorner.CornerRadius = UDim.new(1, 0)
+	sliderFillCorner.Parent = sliderFill
+	
+	-- Slider Knob
+	local sliderKnob = Instance.new("Frame")
+	sliderKnob.Name = "SliderKnob"
+	sliderKnob.Size = UDim2.new(0, 14, 0, 14)
+	sliderKnob.Position = UDim2.new(AIMBOT_SMOOTHNESS, -7, 0.5, -7)
+	sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	sliderKnob.BorderSizePixel = 0
+	sliderKnob.Parent = sliderBg
+	
+	local sliderKnobCorner = Instance.new("UICorner")
+	sliderKnobCorner.CornerRadius = UDim.new(1, 0)
+	sliderKnobCorner.Parent = sliderKnob
+	
+	-- Slider functionality
+	local draggingSlider = false
+	
+	local function updateSlider(input)
+		local relativeX = math.clamp(input.Position.X - sliderBg.AbsolutePosition.X, 0, sliderBg.AbsoluteSize.X)
+		local percentage = relativeX / sliderBg.AbsoluteSize.X
+		
+		AIMBOT_SMOOTHNESS = percentage
+		sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+		sliderKnob.Position = UDim2.new(percentage, -7, 0.5, -7)
+		smoothnessLabel.Text = string.format("Smoothness: %d%%", math.floor(percentage * 100))
+	end
+	
+	sliderBg.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = true
+			updateSlider(input)
+		end
+	end)
+	
+	sliderBg.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = false
+		end
+	end)
+	
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			updateSlider(input)
+		end
+	end)
+	
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = false
+		end
+	end)
+	
+	-- Item Toggle functionality
+	itemToggle.MouseButton1Click:Connect(function()
+		itemEspEnabled = not itemEspEnabled
+		
+		if itemEspEnabled then
+			TweenService:Create(itemToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(46, 204, 113),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			itemToggle.Text = "✓ Item ESP"
+		else
+			TweenService:Create(itemToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(52, 73, 94),
+				TextColor3 = Color3.fromRGB(127, 140, 141)
+			}):Play()
+			itemToggle.Text = "✕ Item ESP"
+			clearAllItemHighlights()
+		end
+	end)
+	
+	-- Player Toggle functionality
+	playerToggle.MouseButton1Click:Connect(function()
+		playerEspEnabled = not playerEspEnabled
+		
+		if playerEspEnabled then
+			TweenService:Create(playerToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(46, 204, 113),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			playerToggle.Text = "✓ Player ESP"
+		else
+			TweenService:Create(playerToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(52, 73, 94),
+				TextColor3 = Color3.fromRGB(127, 140, 141)
+			}):Play()
+			playerToggle.Text = "✕ Player ESP"
+			clearAllPlayerHighlights()
+		end
+	end)
+	
+	-- X-Ray Toggle functionality
+	xrayToggle.MouseButton1Click:Connect(function()
+		xrayEnabled = not xrayEnabled
+		
+		if xrayEnabled then
+			TweenService:Create(xrayToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(46, 204, 113),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			xrayToggle.Text = "✓ X-Ray"
+			applyXRay()
+		else
+			TweenService:Create(xrayToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(231, 76, 60),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			xrayToggle.Text = "✕ X-Ray"
+			removeXRay()
+		end
+	end)
+	
+	-- Aimbot Toggle functionality
+	aimbotToggle.MouseButton1Click:Connect(function()
+		aimbotEnabled = not aimbotEnabled
+		
+		if aimbotEnabled then
+			TweenService:Create(aimbotToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(46, 204, 113),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			aimbotToggle.Text = "✓ Aimbot"
+			createFOVCircle()
+		else
+			TweenService:Create(aimbotToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(231, 76, 60),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			aimbotToggle.Text = "✕ Aimbot"
+			lockedTarget = nil
+		end
+	end)
+	
+	-- FOV Circle Toggle functionality
+	fovToggle.MouseButton1Click:Connect(function()
+		fovCircleEnabled = not fovCircleEnabled
+		
+		if fovCircleEnabled then
+			TweenService:Create(fovToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(46, 204, 113),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			fovToggle.Text = "✓ FOV Circle"
+			createFOVCircle()
+		else
+			TweenService:Create(fovToggle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(231, 76, 60),
+				TextColor3 = Color3.fromRGB(255, 255, 255)
+			}):Play()
+			fovToggle.Text = "✕ FOV Circle"
+		end
+	end)
+	
+	-- Entrance animation
+	frame.Size = UDim2.new(0, 0, 0, 0)
+	frame.Position = UDim2.new(0, 77, 0.5, 0)
+	TweenService:Create(frame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 154, 0, 260),
+		Position = UDim2.new(0, 10, 0.5, -130)
+	}):Play()
+	
+	return screenGui
+end
+
+-- Function to create item billboard
+local function createItemBillboard(model)
+	if itemBillboards[model] then return end
+	
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "ItemLabel"
+	billboard.Adornee = model:FindFirstChild("PrimaryPart") or model:FindFirstChildWhichIsA("BasePart")
+	billboard.Size = UDim2.new(0, 200, 0, 50)
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = model
+	
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Text = model.Name
+	textLabel.TextColor3 = LABEL_COLOR
+	textLabel.TextSize = 14
+	textLabel.Font = Enum.Font.Gotham
+	textLabel.TextStrokeTransparency = 0.5
+	textLabel.TextStrokeColor3 = LABEL_STROKE_COLOR
+	textLabel.Parent = billboard
+	
+	itemBillboards[model] = billboard
+end
+
+-- Function to create item highlight
+local function createItemHighlight(model)
+	if itemHighlights[model] then return end
+	
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "ItemHighlight"
+	highlight.Adornee = model
+	highlight.FillColor = ITEM_HIGHLIGHT_COLOR
+	highlight.OutlineColor = ITEM_OUTLINE_COLOR
+	highlight.FillTransparency = FILL_TRANSPARENCY
+	highlight.OutlineTransparency = OUTLINE_TRANSPARENCY
+	highlight.Parent = model
+	
+	itemHighlights[model] = highlight
+	createItemBillboard(model)
+end
+
+-- Function to remove item highlight
+local function removeItemHighlight(model)
+	if itemHighlights[model] then
+		itemHighlights[model]:Destroy()
+		itemHighlights[model] = nil
+	end
+	if itemBillboards[model] then
+		itemBillboards[model]:Destroy()
+		itemBillboards[model] = nil
+	end
+end
+
+-- Function to clear all item highlights
+function clearAllItemHighlights()
+	for model, _ in pairs(itemHighlights) do
+		removeItemHighlight(model)
+	end
+end
+
+-- Function to get team color
+local function getTeamColor(plr)
+	if plr.Team then
+		return plr.Team.TeamColor.Color
+	end
+	return Color3.fromRGB(255, 255, 255) -- Default white if no team
+end
+
+-- Function to create player billboard
+local function createPlayerBillboard(character, plr)
+	if playerBillboards[character] then return end
+	
+	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	if not torso then return end
+	
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then return end
+	
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "PlayerLabel"
+	billboard.Adornee = torso
+	billboard.Size = UDim2.new(0, 200, 0, 50)
+	billboard.StudsOffset = Vector3.new(3, 0, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = torso
+	
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.BackgroundTransparency = 1
+	textLabel.TextColor3 = getTeamColor(plr)
+	textLabel.TextSize = 14
+	textLabel.Font = Enum.Font.GothamBold
+	textLabel.TextStrokeTransparency = 0.5
+	textLabel.TextStrokeColor3 = LABEL_STROKE_COLOR
+	textLabel.TextXAlignment = Enum.TextXAlignment.Left
+	textLabel.Parent = billboard
+	
+	-- Update health text
+	local function updateText()
+		if humanoid and plr then
+			local teamName = plr.Team and plr.Team.Name or "No Team"
+			local health = math.floor(humanoid.Health)
+			local maxHealth = math.floor(humanoid.MaxHealth)
+			textLabel.Text = string.format("%s\nHP: %d/%d", teamName, health, maxHealth)
+			textLabel.TextColor3 = getTeamColor(plr)
+		end
+	end
+	
+	updateText()
+	humanoid.HealthChanged:Connect(updateText)
+	
+	if plr then
+		plr:GetPropertyChangedSignal("Team"):Connect(updateText)
+	end
+	
+	playerBillboards[character] = {billboard = billboard, update = updateText}
+end
+
+-- Function to create player highlight
+local function createPlayerHighlight(character, plr)
+	if playerHighlights[character] then return end
+	
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "PlayerHighlight"
+	highlight.Adornee = character
+	highlight.FillColor = getTeamColor(plr)
+	highlight.OutlineColor = getTeamColor(plr)
+	highlight.FillTransparency = FILL_TRANSPARENCY
+	highlight.OutlineTransparency = OUTLINE_TRANSPARENCY
+	highlight.Parent = character
+	
+	playerHighlights[character] = highlight
+	createPlayerBillboard(character, plr)
+	
+	-- Update color when team changes
+	if plr then
+		plr:GetPropertyChangedSignal("Team"):Connect(function()
+			local newColor = getTeamColor(plr)
+			highlight.FillColor = newColor
+			highlight.OutlineColor = newColor
+		end)
+	end
+end
+
+-- Function to remove player highlight
+local function removePlayerHighlight(character)
+	if playerHighlights[character] then
+		playerHighlights[character]:Destroy()
+		playerHighlights[character] = nil
+	end
+	if playerBillboards[character] then
+		if playerBillboards[character].billboard then
+			playerBillboards[character].billboard:Destroy()
+		end
+		playerBillboards[character] = nil
+	end
+end
+
+-- Function to clear all player highlights
+function clearAllPlayerHighlights()
+	for character, _ in pairs(playerHighlights) do
+		removePlayerHighlight(character)
+	end
+end
+
+-- Function to update item highlights based on distance
+local function updateItemHighlights()
+	if not itemEspEnabled then return end
+	
+	local itemSpawns = workspace:FindFirstChild("ItemSpawns")
+	if not itemSpawns then return end
+	
+	for _, item in ipairs(itemSpawns:GetDescendants()) do
+		if item:IsA("Model") then
+			if isWithinRange(item) then
+				if not itemHighlights[item] then
+					createItemHighlight(item)
+				end
+			else
+				if itemHighlights[item] then
+					removeItemHighlight(item)
+				end
+			end
+		end
+	end
+	
+	-- Clean up highlights for models that no longer exist
+	for model, _ in pairs(itemHighlights) do
+		if not model.Parent or not model:IsDescendantOf(itemSpawns) then
+			removeItemHighlight(model)
+		end
+	end
+end
+
+-- Function to setup player ESP
+local function setupPlayerESP(plr)
+	if plr == player then return end
+	
+	local function onCharacterAdded(character)
+		if not playerEspEnabled then return end
+		if not shouldHighlightPlayer(plr) then return end
+		
+		character:WaitForChild("HumanoidRootPart")
+		task.wait(0.5)
+		
+		createPlayerHighlight(character, plr)
+	end
+	
+	plr:GetPropertyChangedSignal("Team"):Connect(function()
+		if plr.Character then
+			if shouldHighlightPlayer(plr) then
+				if not playerHighlights[plr.Character] then
+					createPlayerHighlight(plr.Character, plr)
+				end
+			else
+				removePlayerHighlight(plr.Character)
+			end
+		end
+	end)
+	
+	if plr.Character then
+		onCharacterAdded(plr.Character)
+	end
+	
+	plr.CharacterAdded:Connect(onCharacterAdded)
+end
+
+local function updatePlayerESP()
+	if not playerEspEnabled then return end
+	
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player and plr.Character and shouldHighlightPlayer(plr) then
+			if not playerHighlights[plr.Character] then
+				createPlayerHighlight(plr.Character, plr)
+			end
+		end
+	end
+	
+	for character, _ in pairs(playerHighlights) do
+		if not character.Parent then
+			removePlayerHighlight(character)
+		end
+	end
+end
+
+createGUI()
+
+for _, plr in ipairs(Players:GetPlayers()) do
+	setupPlayerESP(plr)
+end
+
+Players.PlayerAdded:Connect(setupPlayerESP)
+
+workspace.DescendantAdded:Connect(function(descendant)
+	if not itemEspEnabled then return end
+	if descendant:IsA("Model") and descendant:IsDescendantOf(workspace:FindFirstChild("ItemSpawns") or Instance.new("Folder")) then
+		task.wait(0.1)
+		if isWithinRange(descendant) then
+			createItemHighlight(descendant)
+		end
+	end
+	
+	if xrayEnabled and descendant:IsA("BasePart") then
+		local isPlayerPart = false
+		local ancestor = descendant.Parent
+		while ancestor do
+			if ancestor:IsA("Model") and Players:GetPlayerFromCharacter(ancestor) then
+				isPlayerPart = true
+				break
+			end
+			if ancestor.Name == "ItemSpawns" then
+				isPlayerPart = true
+				break
+			end
+			ancestor = ancestor.Parent
+		end
+		
+		if not isPlayerPart and descendant.Transparency < 1 then
+			if not originalTransparencies[descendant] then
+				originalTransparencies[descendant] = descendant.Transparency
+			end
+			descendant.Transparency = XRAY_TRANSPARENCY
+		end
+	end
+end)
+
+workspace.DescendantRemoving:Connect(function(descendant)
+	if descendant:IsA("Model") and itemHighlights[descendant] then
+		removeItemHighlight(descendant)
+	end
+	
+	if originalTransparencies[descendant] then
+		originalTransparencies[descendant] = nil
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	updateItemHighlights()
+	updatePlayerESP()
+	updateFOVCircle()
+end)
+
+RunService.RenderStepped:Connect(updateAimbot)
+
+print("ESP System with Aimbot and Smoothness Slider loaded successfully!")
