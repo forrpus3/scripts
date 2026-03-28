@@ -1,0 +1,458 @@
+-- Aim Assist Dev Tool (UPGRADED v5)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local zombiesFolder = workspace:WaitForChild("Zombies")
+
+-- State
+local aimAssistEnabled = false
+local fovRadius = 120
+local FOV_MIN, FOV_MAX = 50, 250
+local panelOpen = true
+
+local targets = {}
+local index = 1
+
+-- Smooth flick detection
+local yawAccum = 0
+local FLICK_THRESHOLD = 0.25
+local FLICK_WINDOW = 0.12
+local flickTimer = 0
+local lastCamCFrame = camera.CFrame
+local switchCooldown = false
+local SWITCH_COOLDOWN = 0.35
+
+-- ================= GUI =================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = player.PlayerGui
+
+-- ================= FOV CIRCLE =================
+
+local fovCircle = Instance.new("Frame")
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovCircle.Size = UDim2.new(0, fovRadius * 2, 0, fovRadius * 2)
+fovCircle.BackgroundTransparency = 1
+fovCircle.Parent = screenGui
+Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1, 0)
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Thickness = 2
+fovStroke.Color = Color3.fromRGB(100, 180, 255)
+fovStroke.Parent = fovCircle
+
+-- Crosshair dot
+local dot = Instance.new("Frame")
+dot.AnchorPoint = Vector2.new(0.5, 0.5)
+dot.Position = UDim2.new(0.5, 0, 0.5, 0)
+dot.Size = UDim2.new(0, 6, 0, 6)
+dot.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+dot.BorderSizePixel = 0
+dot.Parent = screenGui
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+-- ================= PANEL =================
+
+local PANEL_W = 180
+local PANEL_H = 200
+local TAB_H   = 32  -- height of just the tab when closed
+
+local panel = Instance.new("Frame")
+panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+panel.Position = UDim2.new(0, 12, 0.5, -PANEL_H / 2)
+panel.BackgroundColor3 = Color3.fromRGB(10, 10, 18)
+panel.BorderSizePixel = 0
+panel.ClipsDescendants = true
+panel.Active = true
+panel.Parent = screenGui
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
+
+local panelStroke = Instance.new("UIStroke")
+panelStroke.Thickness = 1.5
+panelStroke.Color = Color3.fromRGB(60, 120, 220)
+panelStroke.Parent = panel
+
+-- ================= DRAG HANDLE / TITLE BAR =================
+
+local dragHandle = Instance.new("Frame")
+dragHandle.Size = UDim2.new(1, 0, 0, TAB_H)
+dragHandle.Position = UDim2.new(0, 0, 0, 0)
+dragHandle.BackgroundColor3 = Color3.fromRGB(18, 18, 32)
+dragHandle.BorderSizePixel = 0
+dragHandle.Active = true
+dragHandle.Parent = panel
+Instance.new("UICorner", dragHandle).CornerRadius = UDim.new(0, 12)
+
+-- Patch bottom corners flat
+local dragPatch = Instance.new("Frame")
+dragPatch.Size = UDim2.new(1, 0, 0, 12)
+dragPatch.Position = UDim2.new(0, 0, 1, -12)
+dragPatch.BackgroundColor3 = Color3.fromRGB(18, 18, 32)
+dragPatch.BorderSizePixel = 0
+dragPatch.Parent = dragHandle
+
+-- Title text
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -60, 1, 0)
+titleLabel.Position = UDim2.new(0, 12, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "⚡ AIM ASSIST"
+titleLabel.TextColor3 = Color3.fromRGB(100, 180, 255)
+titleLabel.TextSize = 13
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = dragHandle
+
+-- Toggle open/close chevron button
+local chevronBtn = Instance.new("TextButton")
+chevronBtn.Size = UDim2.new(0, 28, 0, 22)
+chevronBtn.Position = UDim2.new(1, -32, 0.5, -11)
+chevronBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 55)
+chevronBtn.BorderSizePixel = 0
+chevronBtn.Text = "▲"
+chevronBtn.TextColor3 = Color3.fromRGB(120, 160, 255)
+chevronBtn.TextSize = 11
+chevronBtn.Font = Enum.Font.GothamBold
+chevronBtn.Parent = dragHandle
+Instance.new("UICorner", chevronBtn).CornerRadius = UDim.new(0, 6)
+
+-- ================= PANEL CONTENTS =================
+
+local contents = Instance.new("Frame")
+contents.Size = UDim2.new(1, 0, 1, -TAB_H)
+contents.Position = UDim2.new(0, 0, 0, TAB_H)
+contents.BackgroundTransparency = 1
+contents.Parent = panel
+
+-- Toggle button
+local toggle = Instance.new("TextButton")
+toggle.Size = UDim2.new(1, -20, 0, 36)
+toggle.Position = UDim2.new(0, 10, 0, 8)
+toggle.Text = "● OFF"
+toggle.TextSize = 14
+toggle.Font = Enum.Font.GothamBold
+toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggle.BackgroundColor3 = Color3.fromRGB(160, 40, 40)
+toggle.BorderSizePixel = 0
+toggle.Parent = contents
+Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 8)
+
+-- FOV label
+local fovLabel = Instance.new("TextLabel")
+fovLabel.Size = UDim2.new(1, -20, 0, 16)
+fovLabel.Position = UDim2.new(0, 10, 0, 52)
+fovLabel.BackgroundTransparency = 1
+fovLabel.Text = "FOV: " .. fovRadius
+fovLabel.TextColor3 = Color3.fromRGB(160, 200, 255)
+fovLabel.TextSize = 12
+fovLabel.Font = Enum.Font.Gotham
+fovLabel.TextXAlignment = Enum.TextXAlignment.Left
+fovLabel.Parent = contents
+
+-- Slider track
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Size = UDim2.new(1, -20, 0, 10)
+sliderTrack.Position = UDim2.new(0, 10, 0, 74)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = contents
+Instance.new("UICorner", sliderTrack).CornerRadius = UDim.new(1, 0)
+
+local fill = Instance.new("Frame")
+fill.Size = UDim2.new(0.5, 0, 1, 0)
+fill.BackgroundColor3 = Color3.fromRGB(80, 150, 255)
+fill.BorderSizePixel = 0
+fill.Parent = sliderTrack
+Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+local knob = Instance.new("Frame")
+knob.Size = UDim2.new(0, 16, 0, 16)
+knob.Position = UDim2.new(0.5, -8, 0.5, -8)
+knob.BackgroundColor3 = Color3.fromRGB(220, 235, 255)
+knob.BorderSizePixel = 0
+knob.Parent = sliderTrack
+Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+-- Flick hint
+local swipeLabel = Instance.new("TextLabel")
+swipeLabel.Size = UDim2.new(1, -20, 0, 16)
+swipeLabel.Position = UDim2.new(0, 10, 0, 98)
+swipeLabel.BackgroundTransparency = 1
+swipeLabel.Text = "↔ Flick cam to switch"
+swipeLabel.TextColor3 = Color3.fromRGB(80, 80, 120)
+swipeLabel.TextSize = 11
+swipeLabel.Font = Enum.Font.Gotham
+swipeLabel.TextXAlignment = Enum.TextXAlignment.Center
+swipeLabel.Parent = contents
+
+-- Target counter
+local targetLabel = Instance.new("TextLabel")
+targetLabel.Size = UDim2.new(1, -20, 0, 16)
+targetLabel.Position = UDim2.new(0, 10, 0, 120)
+targetLabel.BackgroundTransparency = 1
+targetLabel.Text = "Target: —"
+targetLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
+targetLabel.TextSize = 12
+targetLabel.Font = Enum.Font.Gotham
+targetLabel.TextXAlignment = Enum.TextXAlignment.Center
+targetLabel.Parent = contents
+
+-- Lock icon
+local lockIcon = Instance.new("TextLabel")
+lockIcon.Size = UDim2.new(0, 50, 0, 50)
+lockIcon.Position = UDim2.new(1, -62, 0.5, -25)
+lockIcon.BackgroundTransparency = 1
+lockIcon.Text = ""
+lockIcon.TextColor3 = Color3.fromRGB(255, 80, 80)
+lockIcon.TextSize = 36
+lockIcon.Font = Enum.Font.GothamBold
+lockIcon.TextXAlignment = Enum.TextXAlignment.Center
+lockIcon.Parent = screenGui
+
+-- ================= OPEN / CLOSE =================
+
+local tweenService = game:GetService("TweenService")
+local TWEEN_INFO = TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+local function setPanelOpen(open)
+    panelOpen = open
+    chevronBtn.Text = open and "▲" or "▼"
+
+    local targetSize = open
+        and UDim2.new(0, PANEL_W, 0, PANEL_H)
+        or  UDim2.new(0, PANEL_W, 0, TAB_H)
+
+    tweenService:Create(panel, TWEEN_INFO, { Size = targetSize }):Play()
+end
+
+chevronBtn.MouseButton1Click:Connect(function()
+    setPanelOpen(not panelOpen)
+end)
+
+-- ================= DRAG LOGIC =================
+
+local draggingPanel = false
+local dragStartPos = Vector2.new()
+local panelStartPos = Vector2.new()
+
+dragHandle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or
+       input.UserInputType == Enum.UserInputType.Touch then
+        draggingPanel = true
+        dragStartPos = input.Position
+        panelStartPos = Vector2.new(
+            panel.Position.X.Offset,
+            panel.Position.Y.Offset
+        )
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if draggingPanel then
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStartPos
+            local vp = camera.ViewportSize
+            local newX = math.clamp(panelStartPos.X + delta.X, 0, vp.X - panel.AbsoluteSize.X)
+            local newY = math.clamp(panelStartPos.Y + delta.Y, 0, vp.Y - panel.AbsoluteSize.Y)
+            panel.Position = UDim2.new(0, newX, 0, newY)
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or
+       input.UserInputType == Enum.UserInputType.Touch then
+        draggingPanel = false
+    end
+end)
+
+-- ================= SLIDER LOGIC =================
+
+local sliderDragging = false
+
+local function updateSlider(pct)
+    pct = math.clamp(pct, 0, 1)
+    fill.Size = UDim2.new(pct, 0, 1, 0)
+    knob.Position = UDim2.new(pct, -8, 0.5, -8)
+    fovRadius = math.floor(FOV_MIN + pct * (FOV_MAX - FOV_MIN))
+    fovCircle.Size = UDim2.new(0, fovRadius * 2, 0, fovRadius * 2)
+    fovLabel.Text = "FOV: " .. fovRadius
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseButton1 then
+        sliderDragging = true
+        local pct = (input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X
+        updateSlider(pct)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not sliderDragging then return end
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseMovement then
+        local pct = (input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X
+        updateSlider(pct)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseButton1 then
+        sliderDragging = false
+    end
+end)
+
+-- ================= TOGGLE =================
+
+toggle.MouseButton1Click:Connect(function()
+    aimAssistEnabled = not aimAssistEnabled
+    toggle.Text = aimAssistEnabled and "● ON" or "● OFF"
+    toggle.BackgroundColor3 = aimAssistEnabled
+        and Color3.fromRGB(40, 160, 80)
+        or  Color3.fromRGB(160, 40, 40)
+    fovStroke.Color = aimAssistEnabled
+        and Color3.fromRGB(40, 220, 100)
+        or  Color3.fromRGB(100, 180, 255)
+end)
+
+-- ================= TARGET SYSTEM =================
+
+local function getTargets()
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    targets = {}
+    for _, zombie in ipairs(zombiesFolder:GetChildren()) do
+        local head = zombie:FindFirstChild("Head")
+        if head then
+            local pos, onScreen = camera:WorldToScreenPoint(head.Position)
+            if onScreen then
+                local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                if dist <= fovRadius then
+                    table.insert(targets, { head = head, dist = dist })
+                end
+            end
+        end
+    end
+    table.sort(targets, function(a, b) return a.dist < b.dist end)
+end
+
+local function getTarget()
+    if #targets == 0 then return nil end
+    index = math.clamp(index, 1, #targets)
+    return targets[index].head
+end
+
+local function switchTarget(dir)
+    if #targets == 0 then return end
+    index += dir
+    if index < 1 then index = #targets end
+    if index > #targets then index = 1 end
+end
+
+-- ================= SCROLL WHEEL =================
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseWheel then
+        switchTarget(input.Position.Z > 0 and -1 or 1)
+    end
+end)
+
+-- ================= HOLD E =================
+
+local holdingE = false
+local eTimer = 0
+local E_SWITCH_RATE = 0.3
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.E then holdingE = true end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.E then
+        holdingE = false
+        eTimer = 0
+    end
+end)
+
+-- ================= MAIN LOOP =================
+
+RunService.RenderStepped:Connect(function(dt)
+    getTargets()
+
+    if holdingE and aimAssistEnabled then
+        eTimer += dt
+        if eTimer >= E_SWITCH_RATE then
+            eTimer = 0
+            switchTarget(1)
+        end
+    end
+
+    -- Smooth flick detection
+    if not switchCooldown then
+        local currentCam = camera.CFrame
+        local relative = lastCamCFrame:ToObjectSpace(currentCam)
+        local _, yaw, _ = relative:ToEulerAnglesYXZ()
+
+        flickTimer += dt
+
+        if yawAccum ~= 0 and (yaw * yawAccum < 0) then
+            yawAccum = 0
+            flickTimer = 0
+        end
+
+        yawAccum += yaw
+
+        if flickTimer > FLICK_WINDOW then
+            yawAccum = 0
+            flickTimer = 0
+        end
+
+        if math.abs(yawAccum) >= FLICK_THRESHOLD then
+            switchCooldown = true
+            local dir = yawAccum < 0 and 1 or -1
+            switchTarget(dir)
+            yawAccum = 0
+            flickTimer = 0
+
+            swipeLabel.Text = dir == 1 and "→ Switched" or "← Switched"
+            swipeLabel.TextColor3 = Color3.fromRGB(100, 220, 255)
+
+            task.delay(SWITCH_COOLDOWN, function()
+                switchCooldown = false
+                swipeLabel.Text = "↔ Flick cam to switch"
+                swipeLabel.TextColor3 = Color3.fromRGB(80, 80, 120)
+            end)
+        end
+    else
+        yawAccum = 0
+        flickTimer = 0
+    end
+
+    lastCamCFrame = camera.CFrame
+
+    targetLabel.Text = #targets > 0
+        and ("Target " .. index .. " / " .. #targets)
+        or "Target: —"
+
+    if aimAssistEnabled then
+        local target = getTarget()
+        if target then
+            lockIcon.Text = "🔒"
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, target.Position)
+        else
+            lockIcon.Text = ""
+        end
+    else
+        lockIcon.Text = ""
+    end
+end)
