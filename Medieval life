@@ -1,0 +1,285 @@
+local player = game.Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local fishNames = {"Golden Koi", "Minnow", "River Perch", "Sapphire Trout"}
+local MAX_DRIFT_DISTANCE = 3 
+
+local shopPos = Vector3.new(-54.659, 17.207, 922.329)
+local sellPos = Vector3.new(29.675, 21.693, 1596.472)
+
+-- Dynamic target tracking
+local currentTargetPos = nil
+local activeFishingPrompt = nil
+
+local ScreenGui = Instance.new("ScreenGui")
+local MainFrame = Instance.new("Frame")
+local UICorner = Instance.new("UICorner")
+local Title = Instance.new("TextLabel")
+local ToggleButton = Instance.new("TextButton")
+local StatusDot = Instance.new("Frame")
+local StatusCorner = Instance.new("UICorner")
+local UIStroke = Instance.new("UIStroke")
+
+local _G = getgenv and getgenv() or _G
+_G.FishingEnabled = false
+
+ScreenGui.Parent = game.CoreGui
+ScreenGui.Name = "FishingAutoUI"
+
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.Position = UDim2.new(0.05, 0, 0.4, 0)
+MainFrame.Size = UDim2.new(0, 200, 0, 120)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+UICorner.CornerRadius = UDim.new(0, 12)
+UICorner.Parent = MainFrame
+
+UIStroke.Thickness = 2
+UIStroke.Color = Color3.fromRGB(60, 60, 70)
+UIStroke.Parent = MainFrame
+
+Title.Parent = MainFrame
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.new(0, 0, 0, 10)
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.Font = Enum.Font.GothamBold
+Title.Text = "FISHING AUTO"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 16
+
+ToggleButton.Parent = MainFrame
+ToggleButton.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+ToggleButton.Position = UDim2.new(0.1, 0, 0.45, 0)
+ToggleButton.Size = UDim2.new(0.8, 0, 0, 40)
+ToggleButton.Font = Enum.Font.GothamSemibold
+ToggleButton.Text = "OFF"
+ToggleButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+ToggleButton.TextSize = 14
+
+local ButtonCorner = Instance.new("UICorner")
+ButtonCorner.CornerRadius = UDim.new(0, 8)
+ButtonCorner.Parent = ToggleButton
+
+StatusDot.Parent = ToggleButton
+StatusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+StatusDot.Position = UDim2.new(0.1, 0, 0.35, 0)
+StatusDot.Size = UDim2.new(0, 12, 0, 12)
+
+StatusCorner.CornerRadius = UDim.new(1, 0)
+StatusCorner.Parent = StatusDot
+
+ToggleButton.MouseButton1Click:Connect(function()
+    _G.FishingEnabled = not _G.FishingEnabled
+    
+    if _G.FishingEnabled then
+        ToggleButton.Text = "ON"
+        ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        StatusDot.BackgroundColor3 = Color3.fromRGB(80, 255, 80)
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+        print("Automation Enabled!")
+    else
+        ToggleButton.Text = "OFF"
+        ToggleButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+        StatusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+        currentTargetPos = nil
+        activeFishingPrompt = nil
+        print("Automation Disabled!")
+    end
+end)
+
+-- Background Positioning Lock
+task.spawn(function()
+    while true do
+        if _G.FishingEnabled and currentTargetPos then
+            local character = player.Character or player.CharacterAdded:Wait()
+            local rootPart = character:WaitForChild("HumanoidRootPart")
+            if (rootPart.Position - currentTargetPos).Magnitude > MAX_DRIFT_DISTANCE then
+                character:MoveTo(currentTargetPos)
+            end
+        end
+        task.wait(2) 
+    end
+end)
+
+local function countFishingRods()
+    local count = 0
+    for _, tool in ipairs(player.Backpack:GetChildren()) do
+        if tool.Name == "Fishing Rod" then
+            count += 1
+        end
+    end
+    for _, tool in ipairs(player.Character:GetChildren()) do
+        if tool:IsA("Tool") and tool.Name == "Fishing Rod" then
+            count += 1
+        end
+    end
+    return count
+end
+
+local function hasFish()
+    for _, tool in ipairs(player.Backpack:GetChildren()) do
+        for _, name in ipairs(fishNames) do
+            if tool.Name == name then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function getFish()
+    for _, tool in ipairs(player.Backpack:GetChildren()) do
+        for _, name in ipairs(fishNames) do
+            if tool.Name == name then
+                return tool
+            end
+        end
+    end
+    return nil
+end
+
+-- Dynamic scanner
+local function updateClosestFishingPrompt()
+    local character = player.Character
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+
+    local closestPrompt = nil
+    local closestPart = nil
+    local shortestDistance = math.huge
+    local stationsFolder = workspace:FindFirstChild("Interactables") and workspace.Interactables:FindFirstChild("FishingStations")
+    
+    if not stationsFolder then return nil end
+
+    for _, station in ipairs(stationsFolder:GetChildren()) do
+        local promptPart = station:FindFirstChild("PromptPart")
+        if promptPart then
+            local prompt = promptPart:FindFirstChildOfClass("ProximityPrompt")
+            if prompt then
+                local distance = (rootPart.Position - promptPart.Position).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestPrompt = prompt
+                    closestPart = promptPart
+                end
+            end
+        end
+    end
+    
+    if closestPrompt and closestPart then
+        activeFishingPrompt = closestPrompt
+        currentTargetPos = closestPart.Position + Vector3.new(0, 2, 0)
+    end
+end
+
+-- Main automation loop
+task.spawn(function()
+    while true do
+        if _G.FishingEnabled then
+            
+            -- STEP 0: Team check block
+            if player.Team and player.Team.Name == "Starter" then
+                print("Player is on 'Starter' team. Initializing role change...")
+                while _G.FishingEnabled and player.Team and player.Team.Name == "Starter" do
+                    local args = {
+                        [1] = "Villager",
+                        [2] = "Villager",
+                        [3] = "Boy"
+                    }
+                    ReplicatedStorage.Events.DecideRole:FireServer(unpack(args))
+                    task.wait(1.5)
+                end
+                print("Team successfully changed! Proceeding.")
+            end
+
+            -- STEP 1: Buy rods (Slower/Safer speed)
+            currentTargetPos = shopPos
+            while _G.FishingEnabled and countFishingRods() < 3 do
+                print("Buying rods safely...")
+                ReplicatedStorage.Events.PurchaseEvent:FireServer("Item2", "Fishing Rod")
+                task.wait(0.8) -- Kept slower to avoid data synchronization bugs
+            end
+
+            if _G.FishingEnabled then
+                task.wait(1) 
+            end
+
+            -- STEP 2: Dynamically scan, relocate, and fish (Faster Catching)
+            while _G.FishingEnabled and countFishingRods() > 0 do
+                updateClosestFishingPrompt()
+                
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                
+                if humanoid and activeFishingPrompt then
+                    local currentTool = character:FindFirstChild("Fishing Rod")
+                    
+                    -- Anti-glitch safety buffer for broken rods
+                    if not currentTool then
+                        print("Hand empty. Cooldown applied to avoid inventory deletion glitches...")
+                        task.wait(1.5) 
+                        
+                        local rod = player.Backpack:FindFirstChild("Fishing Rod")
+                        if rod and _G.FishingEnabled then 
+                            humanoid:EquipTool(rod)
+                            task.wait(0.4) 
+                        end
+                    end
+
+                    -- Verify tool is securely equipped before casting
+                    if character:FindFirstChild("Fishing Rod") then
+                        print("Casting rod...")
+                        activeFishingPrompt:InputHoldBegin()
+                        task.wait(activeFishingPrompt.HoldDuration)
+                        activeFishingPrompt:InputHoldEnd()
+
+                        task.wait(0.05) -- Hyper-fast verification delay
+                        if _G.FishingEnabled then
+                            ReplicatedStorage.Events.SkillCheckCompleted:FireServer()
+                        end
+                        task.wait(0.2) -- Fast cycle delay between casts
+                    end
+                else
+                    task.wait(0.3)
+                end
+            end
+
+            -- STEP 3: Sell fish
+            if _G.FishingEnabled and hasFish() then
+                currentTargetPos = sellPos
+                while _G.FishingEnabled and hasFish() do
+                    local character = player.Character
+                    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    local fish = getFish()
+
+                    if humanoid and fish then
+                        if fish.Parent ~= character then
+                            humanoid:EquipTool(fish)
+                            task.wait(0.15)
+                        end
+
+                        local npc = workspace.Interactables.NPCs.FishBuyer
+                        local prompt = npc.HumanoidRootPart.Attachment:FindFirstChildOfClass("ProximityPrompt")
+                        
+                        if prompt then
+                            print("Selling fish...")
+                            prompt:InputHoldBegin()
+                            task.wait(prompt.HoldDuration)
+                            prompt:InputHoldEnd()
+                            task.wait(0.2)
+                        else
+                            task.wait(0.3)
+                        end
+                    else
+                        task.wait(0.3)
+                    end
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
