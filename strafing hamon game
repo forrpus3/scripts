@@ -1,0 +1,150 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local p = Players.LocalPlayer
+local h = p.Character:WaitForChild("HumanoidRootPart")
+local r = p.Character:WaitForChild("CHServer").Remotes.Input
+
+local target = nil
+local running = false
+local settingUp = false
+local strafeDistance = 4
+local strafeMode = "behind"
+
+local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+local function animate(obj, properties)
+    TweenService:Create(obj, tweenInfo, properties):Play()
+end
+
+local function doSetup()
+    settingUp = true
+    h.CFrame = CFrame.new(-206.834, 7.000, 319.024)
+    task.wait(3.0) 
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("ProximityPrompt") then
+            local part = v.Parent
+            local pos = (part:IsA("BasePart") and part.Position) or (part:FindFirstChildWhichIsA("BasePart") and part:FindFirstChildWhichIsA("BasePart").Position)
+            if pos and (pos - Vector3.new(-206.834, 7.000, 319.024)).Magnitude < 20 then
+                fireproximityprompt(v)
+            end
+        end
+    end
+    task.wait(0.5)
+    settingUp = false
+end
+
+local function createButton(text, parent)
+    local btn = Instance.new("TextButton")
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 18
+    btn.BorderSizePixel = 0
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.Parent = parent
+    btn.MouseEnter:Connect(function() animate(btn, {BackgroundColor3 = Color3.fromRGB(80, 80, 100)}) end)
+    btn.MouseLeave:Connect(function() animate(btn, {BackgroundColor3 = Color3.fromRGB(60, 60, 80)}) end)
+    return btn
+end
+
+local function createBox(placeholder, parent)
+    local box = Instance.new("TextBox")
+    box.PlaceholderText = placeholder
+    box.Text = ""
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 16
+    box.BorderSizePixel = 0
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
+    box.Parent = parent
+    return box
+end
+
+local sg = Instance.new("ScreenGui", p:WaitForChild("PlayerGui"))
+sg.ResetOnSpawn = false -- GUI now persists through death
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 280, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -140, 0.5, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
+mainFrame.Parent = sg
+
+local dragging, dragStart, startPos
+mainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+
+local nameBox = createBox("Target Name...", mainFrame)
+nameBox.Size = UDim2.new(0.9, 0, 0, 45)
+nameBox.Position = UDim2.new(0.05, 0, 0.1, 0)
+nameBox.FocusLost:Connect(function()
+    for _, v in pairs(Players:GetPlayers()) do
+        if string.find(v.Name:lower(), nameBox.Text:lower()) then
+            nameBox.Text = v.Name
+            target = v.Character
+            break
+        end
+    end
+end)
+
+local distBox = createBox("Distance (default: 4)", mainFrame)
+distBox.Size = UDim2.new(0.9, 0, 0, 45)
+distBox.Position = UDim2.new(0.05, 0, 0.35, 0)
+distBox.FocusLost:Connect(function() strafeDistance = tonumber(distBox.Text) or 4 end)
+
+local modeBox = createBox("Mode (front/behind)", mainFrame)
+modeBox.Size = UDim2.new(0.9, 0, 0, 45)
+modeBox.Position = UDim2.new(0.05, 0, 0.60, 0)
+modeBox.FocusLost:Connect(function() strafeMode = modeBox.Text:lower() end)
+
+local toggleBtn = createButton("START", mainFrame)
+toggleBtn.Size = UDim2.new(0.9, 0, 0, 50)
+toggleBtn.Position = UDim2.new(0.05, 0, 0.82, 0)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 80)
+
+toggleBtn.MouseButton1Click:Connect(function()
+    running = not running
+    if running then task.spawn(doSetup) end
+    toggleBtn.Text = running and "STOP" or "START"
+    animate(toggleBtn, {BackgroundColor3 = running and Color3.fromRGB(150, 40, 40) or Color3.fromRGB(40, 150, 80)})
+end)
+
+task.spawn(function()
+    while true do
+        if running and not settingUp and target and target:FindFirstChild("HumanoidRootPart") then
+            local root = target.HumanoidRootPart
+            local offset = (strafeMode == "front") and -strafeDistance or strafeDistance
+            local goalCFrame = CFrame.new((root.CFrame * CFrame.new(0, 0, offset)).Position, root.Position)
+            h.CFrame = h.CFrame:Lerp(goalCFrame, 0.3)
+        end
+        task.wait(0.03)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if running and not settingUp and target and target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 then
+            r:FireServer("M1", true, 397.77875450000283)
+            task.wait(0.05)
+            r:FireServer("M1", false, 397.77875450000283)
+            task.wait(0.6)
+        end
+        task.wait(0.1)
+    end
+end)
