@@ -1,0 +1,112 @@
+local p = game:GetService("Players").LocalPlayer
+local h = p.Character:WaitForChild("HumanoidRootPart")
+local r = p.Character:WaitForChild("CHServer").Remotes.Input
+local t = p.Backpack:WaitForChild("Combat")
+
+local running = false
+local target = nil
+local thread = nil
+
+local sg = Instance.new("ScreenGui", p:WaitForChild("PlayerGui"))
+local b = Instance.new("TextButton", sg)
+b.Size = UDim2.new(0, 100, 0, 50)
+b.Position = UDim2.new(0.5, -50, 0.9, 0)
+b.Text = "START"
+b.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+
+local function stopScript()
+    running = false
+    target = nil
+    if thread then task.cancel(thread) end
+    b.Text = "START"
+    b.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+end
+
+local function startScript()
+    running = true
+    b.Text = "STOP"
+    b.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+
+    h.CFrame = CFrame.new(-206.834, 7.000, 319.024)
+    task.wait(0.5)
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("ProximityPrompt") then
+            local part = v.Parent
+            local pos = (part:IsA("BasePart") and part.Position) or (part:FindFirstChildWhichIsA("BasePart") and part:FindFirstChildWhichIsA("BasePart").Position)
+            if pos and (pos - Vector3.new(-206.834, 7.000, 319.024)).Magnitude < 15 then
+                fireproximityprompt(v)
+                break
+            end
+        end
+    end
+    task.wait(0.5)
+    t.Parent = p.Character
+
+    task.spawn(function()
+        while running do
+            r:FireServer("G", true, 58.49479537497973)
+            task.wait(10)
+        end
+    end)
+
+    task.spawn(function()
+        while running do
+            local function getTarget()
+                for _, m in pairs(workspace:GetDescendants()) do
+                    if m:IsA("Model") and m:FindFirstChild("Humanoid") and m:FindFirstChild("HumanoidRootPart") and m.Humanoid.Health > 0 then
+                        if m.Name:sub(1, 6) == "Zombie" then return m end
+                    end
+                end
+                for _, m in pairs(workspace:GetDescendants()) do
+                    if m:IsA("Model") and m:FindFirstChild("Humanoid") and m:FindFirstChild("HumanoidRootPart") and m.Humanoid.Health > 0 then
+                        if m.Name:sub(1, 5) == "Human" then return m end
+                    end
+                end
+                return nil
+            end
+
+            local nextBest = getTarget()
+            local dead = (target and (not target.Parent or target.Humanoid.Health <= 0))
+            
+            if not target or dead or (nextBest and nextBest ~= target and nextBest.Name:sub(1, 6) == "Zombie") then
+                if target ~= nextBest then
+                    target = nextBest
+                    if thread then task.cancel(thread) thread = nil end
+                    if target then
+                        thread = task.spawn(function()
+                            while running and target and target.Parent and target.Humanoid.Health > 0 do
+                                local root = target.HumanoidRootPart
+                                h.CFrame = CFrame.new((root.CFrame * CFrame.new(0, 0, 4)).Position, root.Position)
+                                task.wait(0.05)
+                            end
+                        end)
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+
+    while running do
+        if target and target:FindFirstChild("HumanoidRootPart") and target.Humanoid.Health > 0 then
+            for i = 1, 3 do
+                if not running then break end
+                r:FireServer("M1", true, 397.77875450000283)
+                task.wait(0.05)
+                r:FireServer("M1", false, 397.77875450000283)
+                task.wait(0.55)
+            end
+            task.wait(0.1)
+        else
+            task.wait(0.5)
+        end
+    end
+end
+
+b.MouseButton1Click:Connect(function()
+    if running then
+        stopScript()
+    else
+        startScript()
+    end
+end)
