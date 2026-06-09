@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local p = Players.LocalPlayer
 
 local target = nil
@@ -8,11 +9,36 @@ local running = false
 local settingUp = false
 local strafeDistance = 4
 local strafeMode = "behind"
+local noclipConnection = nil
 
 local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
 local function animate(obj, properties)
     TweenService:Create(obj, tweenInfo, properties):Play()
+end
+
+local function toggleNoclip(state)
+    if state then
+        if not noclipConnection then
+            noclipConnection = RunService.Stepped:Connect(function()
+                if p.Character then
+                    for _, v in pairs(p.Character:GetDescendants()) do
+                        if v:IsA("BasePart") and v.CanCollide then v.CanCollide = false end
+                    end
+                end
+            end)
+        end
+    else
+        if noclipConnection then
+            noclipConnection:Disconnect()
+            noclipConnection = nil
+        end
+        if p.Character then
+            for _, v in pairs(p.Character:GetDescendants()) do
+                if v:IsA("BasePart") then v.CanCollide = true end
+            end
+        end
+    end
 end
 
 local function createButton(text, parent, pos)
@@ -51,7 +77,7 @@ local function doSetup()
     local char = p.Character
     if char and char:FindFirstChild("HumanoidRootPart") then
         char.HumanoidRootPart.CFrame = CFrame.new(-206.834, 7.000, 319.024)
-        task.wait(3.5) -- Increased slightly to ensure full load
+        task.wait(3.5)
         for _, v in pairs(workspace:GetDescendants()) do
             if v:IsA("ProximityPrompt") then
                 local part = v.Parent
@@ -81,9 +107,7 @@ Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
 local dragging, dragStart, startPos
 mainFrame.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = mainFrame.Position
+        dragging = true; dragStart = input.Position; startPos = mainFrame.Position
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
@@ -116,39 +140,40 @@ modeBox.FocusLost:Connect(function() strafeMode = modeBox.Text:lower() end)
 local toggleBtn = createButton("START", mainFrame, UDim2.new(0.05, 0, 0.82, 0))
 toggleBtn.MouseButton1Click:Connect(function()
     running = not running
-    if running then task.spawn(doSetup) end
+    if running then 
+        toggleNoclip(true)
+        task.spawn(doSetup) 
+    else 
+        toggleNoclip(false) 
+    end
     toggleBtn.Text = running and "STOP" or "START"
     animate(toggleBtn, {BackgroundColor3 = running and Color3.fromRGB(150, 40, 40) or Color3.fromRGB(40, 150, 80)})
 end)
 
--- Main Loop: Handles persistent re-setup on respawn
+-- Loops
 task.spawn(function()
     while true do
         if not p.Character or not p.Character:FindFirstChild("HumanoidRootPart") then
             p.CharacterAdded:Wait()
-            task.wait(1.0) -- Give time to load
-            
-            -- Re-trigger setup automatically if running
+            task.wait(1.0)
             if running then 
+                toggleNoclip(true)
                 task.spawn(doSetup) 
             end
         end
-        
         if running and not settingUp and target and target:FindFirstChild("HumanoidRootPart") then
             local char = p.Character
             if char and char:FindFirstChild("HumanoidRootPart") then
-                local currentRoot = char.HumanoidRootPart
                 local root = target.HumanoidRootPart
                 local offset = (strafeMode == "front") and -strafeDistance or strafeDistance
                 local goalCFrame = CFrame.new((root.CFrame * CFrame.new(0, 0, offset)).Position, root.Position)
-                currentRoot.CFrame = currentRoot.CFrame:Lerp(goalCFrame, 0.3)
+                char.HumanoidRootPart.CFrame = char.HumanoidRootPart.CFrame:Lerp(goalCFrame, 0.3)
             end
         end
         task.wait(0.03)
     end
 end)
 
--- Combat Loop
 task.spawn(function()
     while true do
         if running and not settingUp and target then
