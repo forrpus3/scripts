@@ -3,6 +3,7 @@ local running = false
 local target = nil
 local thread = nil
 local PLAYER_SAFE_DISTANCE = 40
+local PLAYER_PROXIMITY_DISTANCE = 60
 local SAFE_POS = Vector3.new(-35.773, -225.421, 407.197)
 local sg = Instance.new("ScreenGui", p:WaitForChild("PlayerGui"))
 sg.ResetOnSpawn = false
@@ -22,6 +23,22 @@ local function isPlayerNearby(zombie)
         local root = char:FindFirstChild("HumanoidRootPart")
         if not root then continue end
         if (root.Position - zombieRoot.Position).Magnitude <= PLAYER_SAFE_DISTANCE then
+            return true
+        end
+    end
+    return false
+end
+
+local function isPlayerTooClose(zombie)
+    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart")
+    if not zombieRoot then return true end
+    for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+        if player == p then continue end
+        local char = player.Character
+        if not char then continue end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+        if (root.Position - zombieRoot.Position).Magnitude <= PLAYER_PROXIMITY_DISTANCE then
             return true
         end
     end
@@ -52,7 +69,7 @@ local function isHiddenFromAllPlayers(zombie)
 end
 
 local function isSafeTarget(zombie)
-    return isHiddenFromAllPlayers(zombie) and not isPlayerNearby(zombie)
+    return isHiddenFromAllPlayers(zombie) and not isPlayerNearby(zombie) and not isPlayerTooClose(zombie)
 end
 
 local function getCharRefs()
