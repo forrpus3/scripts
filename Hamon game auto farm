@@ -1,7 +1,4 @@
 local p = game:GetService("Players").LocalPlayer
-local h = p.Character:WaitForChild("HumanoidRootPart")
-local r = p.Character:WaitForChild("CHServer").Remotes.Input
-local t = p.Backpack:WaitForChild("Combat")
 local running = false
 local target = nil
 local thread = nil
@@ -12,6 +9,15 @@ b.Size = UDim2.new(0, 100, 0, 50)
 b.Position = UDim2.new(0.5, -50, 0.9, 0)
 b.Text = "START"
 b.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+
+local function getCharRefs()
+    local char = p.Character or p.CharacterAdded:Wait()
+    local h = char:WaitForChild("HumanoidRootPart")
+    local r = char:WaitForChild("CHServer").Remotes.Input
+    local t = p.Backpack:WaitForChild("Combat")
+    return h, r, t
+end
+
 local function stopScript()
     running = false
     target = nil
@@ -19,10 +25,14 @@ local function stopScript()
     b.Text = "START"
     b.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
 end
+
 local function startScript()
     running = true
     b.Text = "STOP"
     b.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+
+    local h, r, t = getCharRefs()
+
     h.CFrame = CFrame.new(-206.834, 7.000, 319.024)
     task.wait(0.5)
     for _, v in pairs(workspace:GetDescendants()) do
@@ -37,6 +47,7 @@ local function startScript()
     end
     task.wait(0.5)
     t.Parent = p.Character
+
     task.spawn(function()
         while running do
             r:FireServer("G", true, 58.49479537497973)
@@ -45,6 +56,7 @@ local function startScript()
             task.wait(5)
         end
     end)
+
     task.spawn(function()
         while running do
             local function getTarget()
@@ -76,6 +88,7 @@ local function startScript()
             task.wait(1)
         end
     end)
+
     task.spawn(function()
         while running do
             if target and target:FindFirstChild("HumanoidRootPart") and target.Humanoid.Health > 0 then
@@ -93,6 +106,17 @@ local function startScript()
         end
     end)
 end
+
+p.CharacterAdded:Connect(function(char)
+    if running then
+        stopScript()
+        char:WaitForChild("HumanoidRootPart")
+        char:WaitForChild("CHServer")
+        task.wait(2)
+        startScript()
+    end
+end)
+
 b.MouseButton1Click:Connect(function()
     if running then
         stopScript()
