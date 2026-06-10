@@ -2,6 +2,8 @@ local p = game:GetService("Players").LocalPlayer
 local running = false
 local target = nil
 local thread = nil
+local PLAYER_SAFE_DISTANCE = 40
+local SAFE_POS = Vector3.new(-35.773, -225.421, 407.197)
 local sg = Instance.new("ScreenGui", p:WaitForChild("PlayerGui"))
 sg.ResetOnSpawn = false
 local b = Instance.new("TextButton", sg)
@@ -9,6 +11,49 @@ b.Size = UDim2.new(0, 100, 0, 50)
 b.Position = UDim2.new(0.5, -50, 0.9, 0)
 b.Text = "START"
 b.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+
+local function isPlayerNearby(zombie)
+    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart")
+    if not zombieRoot then return true end
+    for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+        if player == p then continue end
+        local char = player.Character
+        if not char then continue end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+        if (root.Position - zombieRoot.Position).Magnitude <= PLAYER_SAFE_DISTANCE then
+            return true
+        end
+    end
+    return false
+end
+
+local function isHiddenFromAllPlayers(zombie)
+    local zombieRoot = zombie:FindFirstChild("HumanoidRootPart")
+    if not zombieRoot then return false end
+    local zombiePos = zombieRoot.Position
+    for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+        if player == p then continue end
+        local char = player.Character
+        if not char then continue end
+        local head = char:FindFirstChild("Head")
+        if not head then continue end
+        local rayOrigin = head.Position
+        local rayDir = zombiePos - rayOrigin
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterDescendantsInstances = {char, zombie}
+        raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+        local result = workspace:Raycast(rayOrigin, rayDir, raycastParams)
+        if not result then
+            return false
+        end
+    end
+    return true
+end
+
+local function isSafeTarget(zombie)
+    return isHiddenFromAllPlayers(zombie) and not isPlayerNearby(zombie)
+end
 
 local function getCharRefs()
     local char = p.Character or p.CharacterAdded:Wait()
@@ -62,21 +107,35 @@ local function startScript()
             local function getTarget()
                 for _, m in pairs(workspace:GetDescendants()) do
                     if m:IsA("Model") and m:FindFirstChild("Humanoid") and m:FindFirstChild("HumanoidRootPart") and m.Humanoid.Health > 0 then
-                        if m.Name:sub(1, 6) == "Zombie" then return m end
+                        if m.Name:sub(1, 6) == "Zombie" and isSafeTarget(m) then return m end
                     end
                 end
                 return nil
             end
             local nextBest = getTarget()
             local dead = (target and (not target.Parent or target.Humanoid.Health <= 0))
+            local exposed = (target and not isSafeTarget(target))
 
-            if not target or dead or nextBest ~= target then
+            if not target or dead or exposed or nextBest ~= target then
+                if exposed then
+                    target = nil
+                    if thread then task.cancel(thread) thread = nil end
+                    h.CFrame = CFrame.new(SAFE_POS)
+                end
+                if not nextBest then
+                    h.CFrame = CFrame.new(SAFE_POS)
+                end
                 if target ~= nextBest then
                     target = nextBest
                     if thread then task.cancel(thread) thread = nil end
                     if target then
                         thread = task.spawn(function()
                             while running and target and target.Parent and target.Humanoid.Health > 0 do
+                                if not isSafeTarget(target) then
+                                    target = nil
+                                    h.CFrame = CFrame.new(SAFE_POS)
+                                    break
+                                end
                                 local root = target.HumanoidRootPart
                                 h.CFrame = CFrame.new((root.CFrame * CFrame.new(0, 0, 4)).Position, root.Position)
                                 task.wait(0.05)
