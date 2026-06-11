@@ -1,0 +1,204 @@
+-- LocalScript inside StarterPlayerScripts
+
+local player = game:GetService("Players").LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local ITEM_NAME = "Restoration Essence"
+local DISPLAY_DURATION = 5
+local NOTIFY_COOLDOWN = 3
+
+local lastNotifyTime = -NOTIFY_COOLDOWN
+local trackedItems = {}
+local hideThread = nil
+local notifierEnabled = true
+
+local serverJunk = workspace:WaitForChild("ServerJunk")
+local spawnedItems = serverJunk:WaitForChild("SpawnedItems")
+
+-- ─────────────────────────────────────────────
+-- MAIN GUI (notification popup)
+-- ─────────────────────────────────────────────
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "RestorationEssenceNotifier"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Notification frame
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 320, 0, 70)
+frame.Position = UDim2.new(0.5, -160, 0, 20)
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+frame.BackgroundTransparency = 0.1
+frame.BorderSizePixel = 0
+frame.Visible = false
+frame.Parent = screenGui
+
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+local notifStroke = Instance.new("UIStroke", frame)
+notifStroke.Color = Color3.fromRGB(100, 220, 180)
+notifStroke.Thickness = 2
+
+local label = Instance.new("TextLabel", frame)
+label.Size = UDim2.new(1, -20, 0, 36)
+label.Position = UDim2.new(0, 10, 0, 6)
+label.BackgroundTransparency = 1
+label.Font = Enum.Font.GothamBold
+label.TextColor3 = Color3.fromRGB(100, 220, 180)
+label.TextSize = 16
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.RichText = true
+label.Text = "✨ <b>Restoration Essence</b> has dropped!"
+
+local subLabel = Instance.new("TextLabel", frame)
+subLabel.Size = UDim2.new(1, -20, 0, 20)
+subLabel.Position = UDim2.new(0, 10, 0, 42)
+subLabel.BackgroundTransparency = 1
+subLabel.Font = Enum.Font.Gotham
+subLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
+subLabel.TextSize = 13
+subLabel.TextXAlignment = Enum.TextXAlignment.Left
+subLabel.Text = ""
+
+-- ─────────────────────────────────────────────
+-- TOGGLE BUTTON GUI
+-- ─────────────────────────────────────────────
+local toggleFrame = Instance.new("Frame")
+toggleFrame.Size = UDim2.new(0, 220, 0, 44)
+toggleFrame.Position = UDim2.new(0, 16, 0.5, -22)
+toggleFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+toggleFrame.BackgroundTransparency = 0.1
+toggleFrame.BorderSizePixel = 0
+toggleFrame.Parent = screenGui
+
+Instance.new("UICorner", toggleFrame).CornerRadius = UDim.new(0, 10)
+
+local toggleStroke = Instance.new("UIStroke", toggleFrame)
+toggleStroke.Color = Color3.fromRGB(100, 220, 180)
+toggleStroke.Thickness = 2
+
+-- Label on the left
+local toggleLabel = Instance.new("TextLabel", toggleFrame)
+toggleLabel.Size = UDim2.new(0, 130, 1, 0)
+toggleLabel.Position = UDim2.new(0, 12, 0, 0)
+toggleLabel.BackgroundTransparency = 1
+toggleLabel.Font = Enum.Font.GothamBold
+toggleLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+toggleLabel.TextSize = 13
+toggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+toggleLabel.Text = "Essence Notifier"
+
+-- Status text
+local statusLabel = Instance.new("TextLabel", toggleFrame)
+statusLabel.Size = UDim2.new(0, 40, 1, 0)
+statusLabel.Position = UDim2.new(0, 130, 0, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextColor3 = Color3.fromRGB(100, 220, 180)
+statusLabel.TextSize = 12
+statusLabel.Text = "ON"
+
+-- Toggle pill button
+local pill = Instance.new("Frame", toggleFrame)
+pill.Size = UDim2.new(0, 36, 0, 20)
+pill.Position = UDim2.new(1, -48, 0.5, -10)
+pill.BackgroundColor3 = Color3.fromRGB(100, 220, 180)
+pill.BorderSizePixel = 0
+
+Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+local knob = Instance.new("Frame", pill)
+knob.Size = UDim2.new(0, 14, 0, 14)
+knob.Position = UDim2.new(1, -17, 0.5, -7)
+knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+knob.BorderSizePixel = 0
+
+Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+-- Invisible click button over the whole toggleFrame
+local clickBtn = Instance.new("TextButton", toggleFrame)
+clickBtn.Size = UDim2.new(1, 0, 1, 0)
+clickBtn.BackgroundTransparency = 1
+clickBtn.Text = ""
+
+-- ─────────────────────────────────────────────
+-- Toggle logic
+-- ─────────────────────────────────────────────
+local function updateToggleVisuals()
+	if notifierEnabled then
+		pill.BackgroundColor3 = Color3.fromRGB(100, 220, 180)
+		knob.Position = UDim2.new(1, -17, 0.5, -7)
+		statusLabel.TextColor3 = Color3.fromRGB(100, 220, 180)
+		statusLabel.Text = "ON"
+		toggleStroke.Color = Color3.fromRGB(100, 220, 180)
+	else
+		pill.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+		knob.Position = UDim2.new(0, 3, 0.5, -7)
+		statusLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
+		statusLabel.Text = "OFF"
+		toggleStroke.Color = Color3.fromRGB(80, 80, 100)
+		-- Hide active notification if disabling
+		if hideThread then task.cancel(hideThread) end
+		frame.Visible = false
+	end
+end
+
+clickBtn.MouseButton1Click:Connect(function()
+	notifierEnabled = not notifierEnabled
+	updateToggleVisuals()
+end)
+
+-- ─────────────────────────────────────────────
+-- Notification display
+-- ─────────────────────────────────────────────
+local function showNotification(obj)
+	if not notifierEnabled then return end
+
+	local now = tick()
+	if now - lastNotifyTime < NOTIFY_COOLDOWN then return end
+	lastNotifyTime = now
+
+	local pos = nil
+	if obj:IsA("BasePart") then
+		pos = obj.Position
+	else
+		local part = obj:FindFirstChildWhichIsA("BasePart", true)
+		if part then pos = part.Position end
+	end
+
+	if pos and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+		local dist = math.floor((player.Character.HumanoidRootPart.Position - pos).Magnitude)
+		subLabel.Text = string.format("📍 ~%d studs away", dist)
+	else
+		subLabel.Text = "📍 Check SpawnedItems!"
+	end
+
+	frame.Visible = true
+	if hideThread then task.cancel(hideThread) end
+	hideThread = task.delay(DISPLAY_DURATION, function()
+		frame.Visible = false
+		hideThread = nil
+	end)
+end
+
+-- ─────────────────────────────────────────────
+-- Detection
+-- ─────────────────────────────────────────────
+local function checkObject(obj)
+	if obj.Parent == spawnedItems and obj.Name == ITEM_NAME and not trackedItems[obj] then
+		trackedItems[obj] = true
+		showNotification(obj)
+
+		obj.AncestryChanged:Connect(function()
+			if not obj:IsDescendantOf(spawnedItems) then
+				trackedItems[obj] = nil
+			end
+		end)
+	end
+end
+
+for _, obj in ipairs(spawnedItems:GetChildren()) do
+	checkObject(obj)
+end
+
+spawnedItems.ChildAdded:Connect(checkObject)
