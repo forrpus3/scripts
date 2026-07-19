@@ -16,7 +16,7 @@ getgenv().LaunchExploit = getgenv().LaunchExploit or {}
 
 -- Настройки в getgenv()
 getgenv().LaunchExploit.Settings = getgenv().LaunchExploit.Settings or {
-    AutoPerfect = false,
+    AutoPerfect = true,
     Active = true
 }
 
@@ -34,218 +34,9 @@ local Settings = getgenv().LaunchExploit.Settings
 local exploitState = getgenv().LaunchExploit.State
 
 -- Создание мобильной кнопки
-local function createMobileButton()
-    local existing = nil
-    pcall(function()
-        existing = CoreGui:FindFirstChild("LaunchExploitMobileButton")
-    end)
-    if not existing then
-        pcall(function()
-            existing = LocalPlayer.PlayerGui:FindFirstChild("LaunchExploitMobileButton")
-        end)
-    end
-    
-    if existing then 
-        return existing, existing:FindFirstChild("OpenButton")
-    end
-    
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "LaunchExploitMobileButton"
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.DisplayOrder = 999
-    
-    pcall(function()
-        ScreenGui.Parent = CoreGui
-    end)
-    if not ScreenGui.Parent then
-        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    end
-    
-    local Button = Instance.new("TextButton")
-    Button.Name = "OpenButton"
-    Button.Size = UDim2.new(0, 60, 0, 60)
-    Button.Position = UDim2.new(0, 10, 0.5, -30)
-    Button.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-    Button.BorderSizePixel = 0
-    Button.Text = "🚀"
-    Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Button.TextSize = 30
-    Button.Font = Enum.Font.GothamBold
-    Button.Active = true
-    Button.Draggable = true
-    Button.Parent = ScreenGui
-    
-    local UICorner = Instance.new("UICorner")
-    UICorner.CornerRadius = UDim.new(0.5, 0)
-    UICorner.Parent = Button
-    
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(200, 50, 50)
-    UIStroke.Thickness = 3
-    UIStroke.Parent = Button
-    
-    return ScreenGui, Button
-end
 
 -- Создание GUI управления
-local function createControlGUI()
-    local existing = nil
-    pcall(function()
-        existing = CoreGui:FindFirstChild("LaunchExploitGUI")
-    end)
-    if not existing then
-        pcall(function()
-            existing = LocalPlayer.PlayerGui:FindFirstChild("LaunchExploitGUI")
-        end)
-    end
-    
-    if existing then 
-        return existing, existing:FindFirstChild("MainFrame"):FindFirstChild("StatusLabel"), existing:FindFirstChild("MainFrame")
-    end
-    
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "LaunchExploitGUI"
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.DisplayOrder = 1000
-    
-    pcall(function()
-        ScreenGui.Parent = CoreGui
-    end)
-    if not ScreenGui.Parent then
-        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    end
-    
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.new(0, 280, 0, 200)
-    MainFrame.Position = UDim2.new(0.5, -140, 0.1, 0)
-    MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    MainFrame.BorderSizePixel = 0
-    MainFrame.Active = true
-    MainFrame.Draggable = true
-    MainFrame.Visible = false
-    MainFrame.Parent = ScreenGui
-    
-    local UICorner = Instance.new("UICorner")
-    UICorner.CornerRadius = UDim.new(0, 10)
-    UICorner.Parent = MainFrame
-    
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(255, 100, 100)
-    UIStroke.Thickness = 2
-    UIStroke.Parent = MainFrame
-    
-    local Title = Instance.new("TextLabel")
-    Title.Name = "Title"
-    Title.Size = UDim2.new(1, 0, 0, 40)
-    Title.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    Title.BorderSizePixel = 0
-    Title.Text = "🚀 Launch Exploit v10"
-    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Title.TextSize = 18
-    Title.Font = Enum.Font.GothamBold
-    Title.Parent = MainFrame
-    
-    local TitleCorner = Instance.new("UICorner")
-    TitleCorner.CornerRadius = UDim.new(0, 10)
-    TitleCorner.Parent = Title
-    
-    local CloseButton = Instance.new("TextButton")
-    CloseButton.Name = "CloseButton"
-    CloseButton.Size = UDim2.new(0, 35, 0, 35)
-    CloseButton.Position = UDim2.new(1, -37, 0, 2.5)
-    CloseButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    CloseButton.BorderSizePixel = 0
-    CloseButton.Text = "✕"
-    CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    CloseButton.TextSize = 20
-    CloseButton.Font = Enum.Font.GothamBold
-    CloseButton.Parent = MainFrame
-    
-    local CloseCorner = Instance.new("UICorner")
-    CloseCorner.CornerRadius = UDim.new(0, 8)
-    CloseCorner.Parent = CloseButton
-    
-    CloseButton.MouseButton1Click:Connect(function()
-        MainFrame.Visible = false
-    end)
-    
-    local AutoPerfectToggle = Instance.new("TextButton")
-    AutoPerfectToggle.Name = "AutoPerfectToggle"
-    AutoPerfectToggle.Size = UDim2.new(0, 240, 0, 45)
-    AutoPerfectToggle.Position = UDim2.new(0.5, -120, 0, 55)
-    AutoPerfectToggle.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    AutoPerfectToggle.BorderSizePixel = 0
-    AutoPerfectToggle.Text = "Auto Perfect: OFF"
-    AutoPerfectToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
-    AutoPerfectToggle.TextSize = 16
-    AutoPerfectToggle.Font = Enum.Font.GothamBold
-    AutoPerfectToggle.Parent = MainFrame
-    
-    local ToggleCorner = Instance.new("UICorner")
-    ToggleCorner.CornerRadius = UDim.new(0, 8)
-    ToggleCorner.Parent = AutoPerfectToggle
-    
-    local ToggleStroke = Instance.new("UIStroke")
-    ToggleStroke.Color = Color3.fromRGB(100, 100, 100)
-    ToggleStroke.Thickness = 2
-    ToggleStroke.Parent = AutoPerfectToggle
-    
-    AutoPerfectToggle.MouseButton1Click:Connect(function()
-        Settings.AutoPerfect = not Settings.AutoPerfect
-        AutoPerfectToggle.Text = "Auto Perfect: " .. (Settings.AutoPerfect and "ON" or "OFF")
-        AutoPerfectToggle.BackgroundColor3 = Settings.AutoPerfect and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(50, 50, 50)
-        ToggleStroke.Color = Settings.AutoPerfect and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(100, 100, 100)
-        print("[Launch Exploit] Auto Perfect:", Settings.AutoPerfect)
-    end)
-    
-    local InfoLabel = Instance.new("TextLabel")
-    InfoLabel.Name = "InfoLabel"
-    InfoLabel.Size = UDim2.new(1, -20, 0, 25)
-    InfoLabel.Position = UDim2.new(0, 10, 0, 110)
-    InfoLabel.BackgroundTransparency = 1
-    InfoLabel.Text = "Perfect = 2 | Good = 1 | Miss = 0"
-    InfoLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    InfoLabel.TextSize = 11
-    InfoLabel.Font = Enum.Font.Gotham
-    InfoLabel.TextXAlignment = Enum.TextXAlignment.Center
-    InfoLabel.Parent = MainFrame
-    
-    local StatusLabel = Instance.new("TextLabel")
-    StatusLabel.Name = "StatusLabel"
-    StatusLabel.Size = UDim2.new(1, -20, 0, 30)
-    StatusLabel.Position = UDim2.new(0, 10, 0, 140)
-    StatusLabel.BackgroundTransparency = 1
-    StatusLabel.Text = "Status: Initializing..."
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-    StatusLabel.TextSize = 13
-    StatusLabel.Font = Enum.Font.GothamBold
-    StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-    StatusLabel.Parent = MainFrame
-    
-    local ReinitLabel = Instance.new("TextLabel")
-    ReinitLabel.Name = "ReinitLabel"
-    ReinitLabel.Size = UDim2.new(1, -20, 0, 20)
-    ReinitLabel.Position = UDim2.new(0, 10, 0, 175)
-    ReinitLabel.BackgroundTransparency = 1
-    ReinitLabel.Text = "Reinits: 0"
-    ReinitLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-    ReinitLabel.TextSize = 11
-    ReinitLabel.Font = Enum.Font.Gotham
-    ReinitLabel.TextXAlignment = Enum.TextXAlignment.Left
-    ReinitLabel.Parent = MainFrame
-    
-    return ScreenGui, StatusLabel, MainFrame, ReinitLabel
-end
 
-local MobileButtonGui, MobileButton = createMobileButton()
-local ControlGUI, StatusLabel, MainFrame, ReinitLabel = createControlGUI()
-
-MobileButton.MouseButton1Click:Connect(function()
-    MainFrame.Visible = not MainFrame.Visible
-end)
 
 -- ПОСТОЯННАЯ заморозка оригинального скрипта
 task.spawn(function()
@@ -422,8 +213,6 @@ local function initializeExploit(isReinit)
     end
     exploitState.lastInitTime = os.time()
     
-    StatusLabel.Text = "⏳ " .. initType .. "..."
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
     
     -- Отключаем старые подключения
     disconnectAll()
@@ -455,16 +244,12 @@ local function initializeExploit(isReinit)
     
     if not HUD then
         warn("[Launch Exploit] HUD not found after waiting!")
-        StatusLabel.Text = "✗ HUD Not Found"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
         return false
     end
     
     local Launch = HUD:WaitForChild("Launch", 10)
     if not Launch then
         warn("[Launch Exploit] Launch UI not found!")
-        StatusLabel.Text = "✗ Launch UI Not Found"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
         return false
     end
     
@@ -626,9 +411,6 @@ local function initializeExploit(isReinit)
     exploitState.initialized = true
     exploitState.reinitCount = exploitState.reinitCount + 1
     
-    StatusLabel.Text = "✓ Exploit Active & Ready"
-    StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-    ReinitLabel.Text = string.format("Reinits: %d", exploitState.reinitCount)
     
     print("[Launch Exploit] Initialized successfully! (Total inits: " .. exploitState.reinitCount .. ")")
     return true
@@ -675,8 +457,6 @@ task.spawn(function()
         
         if needsReinit and exploitState.initialized then
             warn("[Launch Exploit] Detected state change, triggering auto-reinit...")
-            StatusLabel.Text = "🔄 Auto-reinitializing..."
-            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
             
             task.wait(0.5)
             local success = pcall(function()
@@ -725,8 +505,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     
     if not hudReady then
         warn("[Launch Exploit] HUD did not respawn in time")
-        StatusLabel.Text = "✗ HUD Not Ready"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
         
         -- Schedule a delayed retry
         task.delay(3, function()
@@ -747,16 +525,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     
     if not success2 then
         warn("[Launch Exploit] Respawn reinit failed:", err)
-        StatusLabel.Text = "✗ Reinit Failed"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-    end
-end)
-
--- Открытие GUI
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.Insert or input.KeyCode == Enum.KeyCode.RightBracket then
-        MainFrame.Visible = not MainFrame.Visible
     end
 end)
 
@@ -768,8 +536,6 @@ task.spawn(function()
     end)
     if not success then
         warn("[Launch Exploit] Initial load error:", err)
-        StatusLabel.Text = "✗ Error: " .. tostring(err)
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
     end
 end)
 
@@ -779,8 +545,6 @@ getgenv().LaunchExploit.Disable = function()
     Settings.Active = false
     disconnectAll()
     exploitState.initialized = false
-    StatusLabel.Text = "✗ Exploit Disabled"
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
 end
 
 -- Функция для включения эксплойта (можно вызвать извне)
