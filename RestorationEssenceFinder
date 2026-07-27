@@ -1,11 +1,17 @@
 --[[
-    Restoration Essence ESP + Fluent UI (Complete & Stable)
+    Restoration Essence ESP + Fluent UI (Complete & Stable + Native Keybind Fix)
+    -------------------------------------------------
+    • ESP highlights for items named "Restoration Essence"
+    • Distance indicator (BillboardGui) showing stud distance
+    • Native Fluent Keybind toggle, show/hide distance, max-distance culling
+    • Teleport to nearest Essence button
+    • Scans the entire Workspace dynamically
 --]]
 
 -- // Services
 local RunService = game:GetService("RunService")
-local Players   = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
+local Players    = game:GetService("Players")
+local Workspace  = game:GetService("Workspace")
 
 -- // Fetch Fluent UI
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -17,18 +23,19 @@ local CONFIG = {
     Transparency = 0.2,
     ScanInterval = 0.15,
     Enabled      = true,
-    FolderName   = "Essences",
+    ShowDistance = true,
+    MaxDistance  = 0, -- 0 = no limit, otherwise studs
 }
 
 -- // Internal State
-local highlighted    = {} -- [target] = Highlight
-local indicators     = {} -- [target] = BillboardGui
+local highlighted    = {}    -- [target] = Highlight
+local indicators     = {}    -- [target] = BillboardGui
 local highlightCount = 0
-local MAX_HIGHLIGHTS = 31 -- Roblox engine limit for active Highlights
+local MAX_HIGHLIGHTS = 31    -- Roblox engine limit for active Highlights
 
 local player = Players.LocalPlayer
 
--- Helper to safely calculate spatial center and dimensions
+-- // Helper: Get world position and size (for BasePart or Model)
 local function getPartInfo(target)
     if not target or not target.Parent then return nil, nil end
 
@@ -103,23 +110,22 @@ local function createIndicator(target)
     return bb
 end
 
--- // ESP Scan Logic
+-- // Scan / Refresh ESP
 local function updateESP()
     if not CONFIG.Enabled then
         for t in pairs(highlighted) do detachHighlight(t) end
         return
     end
 
-    -- Clear removed or renamed targets
+    -- Clear removed or changed targets
     for t in pairs(highlighted) do
         if not t.Parent or t.Name ~= CONFIG.ItemName then
             detachHighlight(t)
         end
     end
 
-    -- Dynamically check target root to handle late-loading folders
-    local scanRoot = Workspace:FindFirstChild(CONFIG.FolderName) or Workspace
-    for _, desc in ipairs(scanRoot:GetDescendants()) do
+    -- Scan full Workspace
+    for _, desc in ipairs(Workspace:GetDescendants()) do
         if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
             attachHighlight(desc)
             createIndicator(desc)
@@ -127,20 +133,50 @@ local function updateESP()
     end
 end
 
--- // Main Heartbeat Scan Loop
-local timer = 0
+-- // Teleport to Nearest Essence
+local function teleportToNearest()
+    local character = player and player.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local nearest = nil
+    local nearestDist = math.huge
+
+    for _, desc in ipairs(Workspace:GetDescendants()) do
+        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
+            local pos = getPartInfo(desc)
+            if pos then
+                local dist = (hrp.Position - pos).Magnitude
+                if (CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance) and dist < nearestDist then
+                    nearestDist = dist
+                    nearest = desc
+                end
+            end
+        end
+    end
+
+    if nearest then
+        local targetPos = getPartInfo(nearest)
+        if targetPos then
+            hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+        end
+    end
+end
+
+-- // Main Update Loops
+local scanTimer = 0
 RunService.Heartbeat:Connect(function(dt)
-    timer -= dt
-    if timer <= 0 then
+    scanTimer -= dt
+    if scanTimer <= 0 then
         updateESP()
-        timer = CONFIG.ScanInterval
+        scanTimer = CONFIG.ScanInterval
     end
 end)
 
--- // Distance Updates (RenderStepped for fluid motion)
+-- RenderStepped for distance calculation & culling per frame
 RunService.RenderStepped:Connect(function()
     if not CONFIG.Enabled then return end
-
     local character = player and player.Character
     if not character then return end
     local hrp = character:FindFirstChild("HumanoidRootPart")
@@ -150,25 +186,43 @@ RunService.RenderStepped:Connect(function()
     for target, indicator in pairs(indicators) do
         if target and target.Parent then
             local itemPos = getPartInfo(target)
-            local label = indicator:FindFirstChild("DistanceText")
-            if itemPos and label then
+            if itemPos then
                 local distance = (playerPos - itemPos).Magnitude
-                label.Text = string.format("[ %d Studs ]", math.floor(distance + 0.5))
+                local inRange  = (CONFIG.MaxDistance == 0) or (distance <= CONFIG.MaxDistance)
+
+                -- Toggle Highlight visibility based on distance limit
+                local highlight = highlighted[target]
+                if highlight then
+                    highlight.Enabled = inRange and CONFIG.Enabled
+                end
+
+                -- Toggle Billboard Text based on range and user setting
+                if indicator then
+                    if CONFIG.ShowDistance and inRange then
+                        local label = indicator:FindFirstChild("DistanceText")
+                        if label then
+                            label.Text = string.format("[ %d Studs ]", math.floor(distance + 0.5))
+                            indicator.Enabled = true
+                        end
+                    else
+                        indicator.Enabled = false
+                    end
+                end
+            else
+                detachHighlight(target)
             end
-        else
-            detachHighlight(target)
         end
     end
 end)
 
-updateESP() -- Initial scan
+updateESP() -- Initial Scan Execution
 
--- // Fluent Window Initialization
+-- // Fluent UI Setup
 local Window = Fluent:CreateWindow({
     Title    = "Restoration Essence ESP",
-    SubTitle = "v1.0",
+    SubTitle = "v1.3 – Fixed Keybinds",
     TabWidth = 160,
-    Size     = UDim2.fromOffset(480, 350),
+    Size     = UDim2.fromOffset(480, 440),
     Theme    = "Dark",
 })
 
@@ -176,7 +230,7 @@ local Tabs = {
     ESP = Window:AddTab({Title = "ESP Settings", Icon = "eye"})
 }
 
--- Controls
+-- UI Controls
 local Toggle = Tabs.ESP:AddToggle("ESPToggle", {Title = "Enable ESP", Default = CONFIG.Enabled})
 Toggle:OnChanged(function(state)
     CONFIG.Enabled = state
@@ -186,6 +240,16 @@ Toggle:OnChanged(function(state)
         updateESP()
     end
 end)
+
+-- Native Keybind (Handles key listeners automatically)
+local Keybind = Tabs.ESP:AddKeybind("ESPKeybind", {
+    Title    = "Toggle Keybind",
+    Mode     = "Toggle",
+    Default  = "Z",
+    Callback = function(state)
+        Toggle:SetValue(state) -- Syncs keybind state with the UI Toggle switch
+    end,
+})
 
 local ColorPicker = Tabs.ESP:AddColorpicker("ESPColor", {
     Title   = "ESP Colour",
@@ -224,12 +288,33 @@ IntervalSlider:OnChanged(function(val)
     CONFIG.ScanInterval = val
 end)
 
+local DistanceToggle = Tabs.ESP:AddToggle("DistanceToggle", {Title = "Show Distance", Default = CONFIG.ShowDistance})
+DistanceToggle:OnChanged(function(state)
+    CONFIG.ShowDistance = state
+end)
+
+local MaxDistanceSlider = Tabs.ESP:AddSlider("MaxDistance", {
+    Title    = "Max Distance (studs, 0=off)",
+    Min      = 0,
+    Max      = 500,
+    Default  = CONFIG.MaxDistance,
+    Rounding = 0
+})
+MaxDistanceSlider:OnChanged(function(val)
+    CONFIG.MaxDistance = val
+end)
+
+Tabs.ESP:AddButton({
+    Title    = "Teleport to Nearest",
+    Callback = function() teleportToNearest() end
+})
+
 Tabs.ESP:AddButton({
     Title    = "Scan Now",
     Callback = function() updateESP() end
 })
 
--- // Cleanup Operations
+-- // Cleanup Tasks
 local function cleanup()
     for t in pairs(highlighted) do detachHighlight(t) end
     highlighted    = {}
