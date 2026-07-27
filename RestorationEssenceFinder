@@ -1,11 +1,11 @@
 --[[
-    Restoration Essence ESP + Fluent UI (Complete & Stable + Native Keybind Fix)
+    Restoration Essence ESP + Fluent UI (Complete & Stable + 10s Scan Loop)
     -------------------------------------------------
     • ESP highlights for items named "Restoration Essence"
     • Distance indicator (BillboardGui) showing stud distance
     • Native Fluent Keybind toggle, show/hide distance, max-distance culling
     • Teleport to nearest Essence button
-    • Scans the entire Workspace dynamically
+    • Scans the entire Workspace every 10 seconds
 --]]
 
 -- // Services
@@ -21,7 +21,7 @@ local CONFIG = {
     ItemName     = "Restoration Essence",
     Color        = Color3.fromRGB(0, 255, 0),
     Transparency = 0.2,
-    ScanInterval = 0.15,
+    ScanInterval = 10, -- Scans every 10 seconds
     Enabled      = true,
     ShowDistance = true,
     MaxDistance  = 0, -- 0 = no limit, otherwise studs
@@ -110,7 +110,7 @@ local function createIndicator(target)
     return bb
 end
 
--- // Scan / Refresh ESP
+-- // Core Workspace Scan
 local function updateESP()
     if not CONFIG.Enabled then
         for t in pairs(highlighted) do detachHighlight(t) end
@@ -164,19 +164,18 @@ local function teleportToNearest()
     end
 end
 
--- // Main Update Loops
-local scanTimer = 0
-RunService.Heartbeat:Connect(function(dt)
-    scanTimer -= dt
-    if scanTimer <= 0 then
+-- // 10-Second Scan Loop
+task.spawn(function()
+    while true do
         updateESP()
-        scanTimer = CONFIG.ScanInterval
+        task.wait(CONFIG.ScanInterval)
     end
 end)
 
--- RenderStepped for distance calculation & culling per frame
+-- // Render Loop (Smooth Distance Updates Per Frame)
 RunService.RenderStepped:Connect(function()
     if not CONFIG.Enabled then return end
+
     local character = player and player.Character
     if not character then return end
     local hrp = character:FindFirstChild("HumanoidRootPart")
@@ -215,14 +214,12 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-updateESP() -- Initial Scan Execution
-
 -- // Fluent UI Setup
 local Window = Fluent:CreateWindow({
     Title    = "Restoration Essence ESP",
-    SubTitle = "v1.3 – Fixed Keybinds",
+    SubTitle = "v1.5 – 10s Scan Interval",
     TabWidth = 160,
-    Size     = UDim2.fromOffset(480, 440),
+    Size     = UDim2.fromOffset(480, 380),
     Theme    = "Dark",
 })
 
@@ -277,17 +274,6 @@ TransparencySlider:OnChanged(function(val)
     end
 end)
 
-local IntervalSlider = Tabs.ESP:AddSlider("ScanInterval", {
-    Title    = "Scan Interval (s)",
-    Min      = 0.05,
-    Max      = 1,
-    Default  = CONFIG.ScanInterval,
-    Rounding = 2
-})
-IntervalSlider:OnChanged(function(val)
-    CONFIG.ScanInterval = val
-end)
-
 local DistanceToggle = Tabs.ESP:AddToggle("DistanceToggle", {Title = "Show Distance", Default = CONFIG.ShowDistance})
 DistanceToggle:OnChanged(function(state)
     CONFIG.ShowDistance = state
@@ -307,11 +293,6 @@ end)
 Tabs.ESP:AddButton({
     Title    = "Teleport to Nearest",
     Callback = function() teleportToNearest() end
-})
-
-Tabs.ESP:AddButton({
-    Title    = "Scan Now",
-    Callback = function() updateESP() end
 })
 
 -- // Cleanup Tasks
