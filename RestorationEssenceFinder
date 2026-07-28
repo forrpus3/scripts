@@ -1,17 +1,18 @@
 --[[
-    Restoration Essence ESP + Fluent UI (Complete & Stable + 10s Scan Loop)
+    Restoration Essence ESP + Fluent UI (Separate AutoFarm Loop)
     -------------------------------------------------
-    • ESP highlights for items named "Restoration Essence"
+    • ESP highlights items named "Restoration Essence"
     • Distance indicator (BillboardGui) showing stud distance
     • Native Fluent Keybind toggle, show/hide distance, max-distance culling
-    • Teleport to nearest Essence button
-    • Scans the entire Workspace every 10 seconds
+    • AutoFarm: Independent 3.5-second loop that grabs ground Essences to Backpack
+    • Real-time spawn grabbing (DescendantAdded listener)
+    • ESP Scans Workspace independently every 10 seconds
 --]]
 
 -- // Services
-local RunService = game:GetService("RunService")
-local Players    = game:GetService("Players")
-local Workspace  = game:GetService("Workspace")
+local RunService       = game:GetService("RunService")
+local Players          = game:GetService("Players")
+local Workspace        = game:GetService("Workspace")
 
 -- // Fetch Fluent UI
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -21,10 +22,12 @@ local CONFIG = {
     ItemName     = "Restoration Essence",
     Color        = Color3.fromRGB(0, 255, 0),
     Transparency = 0.2,
-    ScanInterval = 10, -- Scans every 10 seconds
+    ScanInterval = 10,           -- ESP Scans every 10 seconds
+    GrabInterval = 3.5,          -- AutoFarm Grabs every 3.5 seconds
     Enabled      = true,
     ShowDistance = true,
-    MaxDistance  = 0, -- 0 = no limit, otherwise studs
+    MaxDistance  = 0,            -- 0 = no limit, otherwise studs
+    AutoFarm     = false,        -- Auto-grabs items to Backpack
 }
 
 -- // Internal State
@@ -32,8 +35,24 @@ local highlighted    = {}    -- [target] = Highlight
 local indicators     = {}    -- [target] = BillboardGui
 local highlightCount = 0
 local MAX_HIGHLIGHTS = 31    -- Roblox engine limit for active Highlights
+local lastGrab       = {}    -- [target] = timestamp (anti-spam)
 
 local player = Players.LocalPlayer
+
+-- // Helper: Check if an item is sitting on the ground (not held by a player)
+local function isGroundItem(target)
+    if not target or not target.Parent then return false end
+
+    local current = target
+    while current and current ~= Workspace do
+        if current:IsA("Backpack") or current:FindFirstChildOfClass("Humanoid") or Players:GetPlayerFromCharacter(current) then
+            return false
+        end
+        current = current.Parent
+    end
+
+    return true
+end
 
 -- // Helper: Get world position and size (for BasePart or Model)
 local function getPartInfo(target)
@@ -79,6 +98,7 @@ local function detachHighlight(target)
         indicator:Destroy()
         indicators[target] = nil
     end
+    lastGrab[target] = nil
 end
 
 local function createIndicator(target)
@@ -110,7 +130,112 @@ local function createIndicator(target)
     return bb
 end
 
--- // Core Workspace Scan
+-- // Move an item directly to the player's Backpack
+local function grabItem(target)
+    if not target or not target.Parent then return end
+    if not isGroundItem(target) then return end
+
+    local backpack = player:FindFirstChild("Backpack")
+    if not backpack then
+        backpack = Instance.new("Backpack")
+        backpack.Parent = player
+    end
+    target.Parent = backpack
+end
+
+-- // Grab nearest Essence (GROUND ONLY, moves to player's Backpack)
+local function grabNearest()
+    local character = player.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local nearest = nil
+    local nearestDist = math.huge
+
+    for _, desc in ipairs(Workspace:GetDescendants()) do
+        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
+            if isGroundItem(desc) then
+                local pos = getPartInfo(desc)
+                if pos then
+                    local dist = (hrp.Position - pos).Magnitude
+                    if (CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance) and dist < nearestDist then
+                        nearestDist = dist
+                        nearest = desc
+                    end
+                end
+            end
+        end
+    end
+
+    if nearest then
+        grabItem(nearest)
+    end
+end
+
+-- // AutoFarm Check (Scans Workspace specifically to grab items)
+local function runAutoFarm()
+    if not CONFIG.AutoFarm then return end
+
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+
+    for _, desc in ipairs(Workspace:GetDescendants()) do
+        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
+            if isGroundItem(desc) then
+                if hrp then
+                    local pos = getPartInfo(desc)
+                    if pos then
+                        local dist = (hrp.Position - pos).Magnitude
+                        if CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance then
+                            grabItem(desc)
+                        end
+                    end
+                else
+                    grabItem(desc)
+                end
+            end
+        end
+    end
+end
+
+-- // AutoFarm Handler (Instant trigger when a new Essence appears)
+local function onEssenceAdded(desc)
+    if not (desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model"))) then return end
+
+    -- Attach ESP if enabled
+    if CONFIG.Enabled then
+        attachHighlight(desc)
+        createIndicator(desc)
+    end
+
+    if not CONFIG.AutoFarm then return end
+    if not isGroundItem(desc) then return end
+
+    -- Cooldown check per item
+    local now = tick()
+    if lastGrab[desc] and now - lastGrab[desc] < 0.5 then return end
+    lastGrab[desc] = now
+
+    -- Check MaxDistance limit before auto-grabbing
+    local character = player.Character
+    if character then
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local pos = getPartInfo(desc)
+            if pos then
+                local dist = (hrp.Position - pos).Magnitude
+                if CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance then
+                    grabItem(desc)
+                end
+            end
+        end
+    else
+        grabItem(desc)
+    end
+end
+
+-- // Core Workspace Scan (10-Second Loop)
 local function updateESP()
     if not CONFIG.Enabled then
         for t in pairs(highlighted) do detachHighlight(t) end
@@ -124,7 +249,7 @@ local function updateESP()
         end
     end
 
-    -- Scan full Workspace
+    -- Scan full Workspace strictly for ESP
     for _, desc in ipairs(Workspace:GetDescendants()) do
         if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
             attachHighlight(desc)
@@ -133,42 +258,19 @@ local function updateESP()
     end
 end
 
--- // Teleport to Nearest Essence
-local function teleportToNearest()
-    local character = player and player.Character
-    if not character then return end
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local nearest = nil
-    local nearestDist = math.huge
-
-    for _, desc in ipairs(Workspace:GetDescendants()) do
-        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
-            local pos = getPartInfo(desc)
-            if pos then
-                local dist = (hrp.Position - pos).Magnitude
-                if (CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance) and dist < nearestDist then
-                    nearestDist = dist
-                    nearest = desc
-                end
-            end
-        end
-    end
-
-    if nearest then
-        local targetPos = getPartInfo(nearest)
-        if targetPos then
-            hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
-        end
-    end
-end
-
--- // 10-Second Scan Loop
+-- // Dedicated 10-Second ESP Scan Loop
 task.spawn(function()
     while true do
         updateESP()
         task.wait(CONFIG.ScanInterval)
+    end
+end)
+
+-- // Dedicated 3.5-Second AutoFarm Loop
+task.spawn(function()
+    while true do
+        runAutoFarm()
+        task.wait(CONFIG.GrabInterval)
     end
 end)
 
@@ -189,13 +291,11 @@ RunService.RenderStepped:Connect(function()
                 local distance = (playerPos - itemPos).Magnitude
                 local inRange  = (CONFIG.MaxDistance == 0) or (distance <= CONFIG.MaxDistance)
 
-                -- Toggle Highlight visibility based on distance limit
                 local highlight = highlighted[target]
                 if highlight then
                     highlight.Enabled = inRange and CONFIG.Enabled
                 end
 
-                -- Toggle Billboard Text based on range and user setting
                 if indicator then
                     if CONFIG.ShowDistance and inRange then
                         local label = indicator:FindFirstChild("DistanceText")
@@ -214,12 +314,18 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- // Listen for newly-added Essences
+Workspace.DescendantAdded:Connect(onEssenceAdded)
+
+-- // Initial scan
+updateESP()
+
 -- // Fluent UI Setup
 local Window = Fluent:CreateWindow({
     Title    = "Restoration Essence ESP",
-    SubTitle = "v1.5 – 10s Scan Interval",
+    SubTitle = "v2.0 – Dual-Loop AutoFarm",
     TabWidth = 160,
-    Size     = UDim2.fromOffset(480, 380),
+    Size     = UDim2.fromOffset(480, 420),
     Theme    = "Dark",
 })
 
@@ -238,13 +344,12 @@ Toggle:OnChanged(function(state)
     end
 end)
 
--- Native Keybind (Handles key listeners automatically)
 local Keybind = Tabs.ESP:AddKeybind("ESPKeybind", {
     Title    = "Toggle Keybind",
     Mode     = "Toggle",
     Default  = "Z",
     Callback = function(state)
-        Toggle:SetValue(state) -- Syncs keybind state with the UI Toggle switch
+        Toggle:SetValue(state)
     end,
 })
 
@@ -290,9 +395,22 @@ MaxDistanceSlider:OnChanged(function(val)
     CONFIG.MaxDistance = val
 end)
 
+local AutoFarmToggle = Tabs.ESP:AddToggle("AutoFarmToggle", {Title = "AutoFarm (Auto-Grab 3.5s)", Default = CONFIG.AutoFarm})
+AutoFarmToggle:OnChanged(function(state)
+    CONFIG.AutoFarm = state
+    if state then
+        runAutoFarm() -- Immediate check when turned on
+    end
+end)
+
 Tabs.ESP:AddButton({
-    Title    = "Teleport to Nearest",
-    Callback = function() teleportToNearest() end
+    Title    = "Grab Nearest (Ground Only)",
+    Callback = function() grabNearest() end
+})
+
+Tabs.ESP:AddButton({
+    Title    = "Scan Now",
+    Callback = function() updateESP() end
 })
 
 -- // Cleanup Tasks
@@ -301,6 +419,7 @@ local function cleanup()
     highlighted    = {}
     indicators     = {}
     highlightCount = 0
+    lastGrab       = {}
 end
 
 if player then
