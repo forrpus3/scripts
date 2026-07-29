@@ -1,48 +1,65 @@
 --[[
-    Restoration Essence ESP + Fluent UI (Separate AutoFarm Loop)
+    Restoration Essence Hub + Fluent UI (Ultimate Edition)
     -------------------------------------------------
-    • ESP highlights items named "Restoration Essence"
-    • Distance indicator (BillboardGui) showing stud distance
-    • Native Fluent Keybind toggle, show/hide distance, max-distance culling
-    • AutoFarm: Independent 3.5-second loop that grabs ground Essences to Backpack
-    • Real-time spawn grabbing (DescendantAdded listener)
-    • ESP Scans Workspace independently every 10 seconds
+    • Essence & Tool ESP (10s scan, frame-perfect distance)
+    • Player ESP
+    • AutoFarm (Essences & Tools) via physical touch simulation
+    • LocalPlayer Mods (WalkSpeed, JumpPower, Inf Jump, Fullbright)
+    • Server Hopping
 --]]
 
 -- // Services
 local RunService       = game:GetService("RunService")
 local Players          = game:GetService("Players")
 local Workspace        = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+local HttpService      = game:GetService("HttpService")
+local TeleportService  = game:GetService("TeleportService")
 
 -- // Fetch Fluent UI
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
 -- // Configuration
 local CONFIG = {
-    ItemName     = "Restoration Essence",
-    Color        = Color3.fromRGB(0, 255, 0),
-    Transparency = 0.2,
-    ScanInterval = 10,           -- ESP Scans every 10 seconds
-    GrabInterval = 3.5,          -- AutoFarm Grabs every 3.5 seconds
-    Enabled      = true,
-    ShowDistance = true,
-    MaxDistance  = 0,            -- 0 = no limit, otherwise studs
-    AutoFarm     = false,        -- Auto-grabs items to Backpack
+    ItemName       = "Restoration Essence",
+    Color          = Color3.fromRGB(0, 255, 0),
+    PlayerESPColor = Color3.fromRGB(255, 0, 0),
+    Transparency   = 0.2,
+    ScanInterval   = 10,
+    GrabInterval   = 3.5,
+    Enabled        = true,
+    ShowDistance   = true,
+    MaxDistance    = 0,
+    AutoFarm       = false,
+    GrabAllTools   = false,
+    PlayerESP      = false,
+    WalkSpeed      = 16,
+    JumpPower      = 50,
+    InfJump        = false,
+    Fullbright     = false,
 }
 
 -- // Internal State
-local highlighted    = {}    -- [target] = Highlight
-local indicators     = {}    -- [target] = BillboardGui
+local highlighted    = {}
+local indicators     = {}
 local highlightCount = 0
-local MAX_HIGHLIGHTS = 31    -- Roblox engine limit for active Highlights
-local lastGrab       = {}    -- [target] = timestamp (anti-spam)
+local MAX_HIGHLIGHTS = 31
+local lastGrab       = {}
 
 local player = Players.LocalPlayer
 
--- // Helper: Check if an item is sitting on the ground (not held by a player)
+-- // Original Lighting Backup
+local DefaultLighting = {
+    Ambient = Lighting.Ambient,
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    GlobalShadows = Lighting.GlobalShadows
+}
+
+-- // Helpers
 local function isGroundItem(target)
     if not target or not target.Parent then return false end
-
     local current = target
     while current and current ~= Workspace do
         if current:IsA("Backpack") or current:FindFirstChildOfClass("Humanoid") or Players:GetPlayerFromCharacter(current) then
@@ -50,32 +67,33 @@ local function isGroundItem(target)
         end
         current = current.Parent
     end
-
     return true
 end
 
--- // Helper: Get world position and size (for BasePart or Model)
 local function getPartInfo(target)
     if not target or not target.Parent then return nil, nil end
-
     if target:IsA("BasePart") then
         return target.Position, target.Size
-    elseif target:IsA("Model") then
+    elseif target:IsA("Model") or target:IsA("Tool") then
+        local primary = target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
+        if primary then return primary.Position, primary.Size end
         local cf, size = target:GetBoundingBox()
         return cf.Position, size
     end
     return nil, nil
 end
 
--- // Highlight & Indicator Management
-local function attachHighlight(target)
+-- // ESP Management
+local function attachHighlight(target, isPlayer)
     if not (target:IsA("BasePart") or target:IsA("Model")) then return end
     if highlighted[target] then return end
     if highlightCount >= MAX_HIGHLIGHTS then return end
 
     local highlight = Instance.new("Highlight")
-    highlight.FillColor           = CONFIG.Color
-    highlight.OutlineColor        = CONFIG.Color
+    local col = isPlayer and CONFIG.PlayerESPColor or CONFIG.Color
+    
+    highlight.FillColor           = col
+    highlight.OutlineColor        = col
     highlight.FillTransparency    = CONFIG.Transparency
     highlight.OutlineTransparency = 0
     highlight.Adornee             = target
@@ -92,7 +110,6 @@ local function detachHighlight(target)
         highlighted[target] = nil
         highlightCount -= 1
     end
-
     local indicator = indicators[target]
     if indicator then
         indicator:Destroy()
@@ -101,7 +118,7 @@ local function detachHighlight(target)
     lastGrab[target] = nil
 end
 
-local function createIndicator(target)
+local function createIndicator(target, prefix)
     if not (target:IsA("BasePart") or target:IsA("Model")) then return end
     if indicators[target] then return indicators[target] end
 
@@ -123,142 +140,159 @@ local function createIndicator(target)
     tl.TextColor3 = Color3.fromRGB(255, 255, 255)
     tl.Font = Enum.Font.SourceSansBold
     tl.TextScaled = true
+    
+    -- Store prefix (e.g. Player Name) as an attribute to use during updates
+    if prefix then tl:SetAttribute("Prefix", prefix) end
+    
     tl.Parent = bb
-
     bb.Parent = target
     indicators[target] = bb
     return bb
 end
 
--- // Move an item directly to the player's Backpack
+-- // Grab Logic (Using Physical Touch Bypass)
 local function grabItem(target)
     if not target or not target.Parent then return end
     if not isGroundItem(target) then return end
 
-    local backpack = player:FindFirstChild("Backpack")
-    if not backpack then
-        backpack = Instance.new("Backpack")
-        backpack.Parent = player
-    end
-    target.Parent = backpack
-end
-
--- // Grab nearest Essence (GROUND ONLY, moves to player's Backpack)
-local function grabNearest()
     local character = player.Character
     if not character then return end
     local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    
+    local handle = target:IsA("BasePart") and target 
+        or target:FindFirstChild("Handle") 
+        or target:FindFirstChildWhichIsA("BasePart")
 
-    local nearest = nil
-    local nearestDist = math.huge
-
-    for _, desc in ipairs(Workspace:GetDescendants()) do
-        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
-            if isGroundItem(desc) then
-                local pos = getPartInfo(desc)
-                if pos then
-                    local dist = (hrp.Position - pos).Magnitude
-                    if (CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance) and dist < nearestDist then
-                        nearestDist = dist
-                        nearest = desc
-                    end
-                end
-            end
-        end
-    end
-
-    if nearest then
-        grabItem(nearest)
+    if hrp and handle and firetouchinterest then
+        firetouchinterest(hrp, handle, 0)
+        task.wait(0.05)
+        firetouchinterest(hrp, handle, 1)
+    else
+        -- Fallback local reparenting
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then target.Parent = backpack end
     end
 end
 
--- // AutoFarm Check (Scans Workspace specifically to grab items)
+-- // AutoFarm Functions
 local function runAutoFarm()
     if not CONFIG.AutoFarm then return end
-
-    local character = player.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 
     for _, desc in ipairs(Workspace:GetDescendants()) do
-        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
-            if isGroundItem(desc) then
-                if hrp then
-                    local pos = getPartInfo(desc)
-                    if pos then
-                        local dist = (hrp.Position - pos).Magnitude
-                        if CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance then
-                            grabItem(desc)
-                        end
-                    end
-                else
+        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) and isGroundItem(desc) then
+            if hrp then
+                local pos = getPartInfo(desc)
+                if pos and (CONFIG.MaxDistance == 0 or (hrp.Position - pos).Magnitude <= CONFIG.MaxDistance) then
                     grabItem(desc)
                 end
+            else
+                grabItem(desc)
             end
         end
     end
 end
 
--- // AutoFarm Handler (Instant trigger when a new Essence appears)
-local function onEssenceAdded(desc)
-    if not (desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model"))) then return end
-
-    -- Attach ESP if enabled
-    if CONFIG.Enabled then
-        attachHighlight(desc)
-        createIndicator(desc)
-    end
-
-    if not CONFIG.AutoFarm then return end
-    if not isGroundItem(desc) then return end
-
-    -- Cooldown check per item
-    local now = tick()
-    if lastGrab[desc] and now - lastGrab[desc] < 0.5 then return end
-    lastGrab[desc] = now
-
-    -- Check MaxDistance limit before auto-grabbing
-    local character = player.Character
-    if character then
-        local hrp = character:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local pos = getPartInfo(desc)
-            if pos then
-                local dist = (hrp.Position - pos).Magnitude
-                if CONFIG.MaxDistance == 0 or dist <= CONFIG.MaxDistance then
+local function runGrabAllTools()
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    for _, desc in ipairs(Workspace:GetDescendants()) do
+        if desc:IsA("Tool") and isGroundItem(desc) then
+            if hrp then
+                local pos = getPartInfo(desc)
+                if pos and (CONFIG.MaxDistance == 0 or (hrp.Position - pos).Magnitude <= CONFIG.MaxDistance) then
                     grabItem(desc)
                 end
+            else
+                grabItem(desc)
             end
         end
-    else
-        grabItem(desc)
     end
 end
 
--- // Core Workspace Scan (10-Second Loop)
+-- // Update ESP & Player ESP
 local function updateESP()
-    if not CONFIG.Enabled then
-        for t in pairs(highlighted) do detachHighlight(t) end
-        return
-    end
-
-    -- Clear removed or changed targets
+    -- Cleanup Stale Targets
     for t in pairs(highlighted) do
-        if not t.Parent or t.Name ~= CONFIG.ItemName then
+        if not t.Parent then
             detachHighlight(t)
         end
     end
 
-    -- Scan full Workspace strictly for ESP
-    for _, desc in ipairs(Workspace:GetDescendants()) do
-        if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
-            attachHighlight(desc)
-            createIndicator(desc)
+    -- 1. Scan Items
+    if CONFIG.Enabled then
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
+                attachHighlight(desc, false)
+                createIndicator(desc)
+            end
+        end
+    end
+
+    -- 2. Scan Players
+    if CONFIG.PlayerESP then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                attachHighlight(p.Character, true)
+                createIndicator(p.Character, p.Name)
+            end
+        end
+    else
+        -- Remove Player ESP if toggled off
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character and highlighted[p.Character] then
+                detachHighlight(p.Character)
+            end
         end
     end
 end
 
--- // Dedicated 10-Second ESP Scan Loop
+-- // Server Hop Logic
+local function serverHop()
+    local servers = {}
+    local req = request or http_request or (syn and syn.request)
+    if not req then return end
+    
+    local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
+    local response = req({Url = url, Method = "GET"})
+    
+    if response and response.Body then
+        local body = HttpService:JSONDecode(response.Body)
+        if body and body.data then
+            for _, v in pairs(body.data) do
+                if type(v) == "table" and v.playing < v.maxPlayers and v.id ~= game.JobId then
+                    table.insert(servers, 1, v.id)
+                end
+            end
+        end
+        if #servers > 0 then
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], player)
+        end
+    end
+end
+
+-- // Spawn Handlers & Loops
+Workspace.DescendantAdded:Connect(function(desc)
+    if desc.Name == CONFIG.ItemName and (desc:IsA("BasePart") or desc:IsA("Model")) then
+        if CONFIG.Enabled then
+            attachHighlight(desc, false)
+            createIndicator(desc)
+        end
+        if CONFIG.AutoFarm and isGroundItem(desc) then grabItem(desc) end
+    end
+    if desc:IsA("Tool") and CONFIG.GrabAllTools and isGroundItem(desc) then
+        grabItem(desc)
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if CONFIG.InfJump and player.Character then
+        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
 task.spawn(function()
     while true do
         updateESP()
@@ -266,170 +300,139 @@ task.spawn(function()
     end
 end)
 
--- // Dedicated 3.5-Second AutoFarm Loop
 task.spawn(function()
     while true do
-        runAutoFarm()
+        if CONFIG.AutoFarm then runAutoFarm() end
+        if CONFIG.GrabAllTools then runGrabAllTools() end
         task.wait(CONFIG.GrabInterval)
     end
 end)
 
--- // Render Loop (Smooth Distance Updates Per Frame)
+-- // Render Loop (Visuals & Char Mods)
 RunService.RenderStepped:Connect(function()
-    if not CONFIG.Enabled then return end
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    local hum = character and character:FindFirstChildOfClass("Humanoid")
 
-    local character = player and player.Character
-    if not character then return end
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local playerPos = hrp.Position
+    -- Enforce Character Mods
+    if hum then
+        if CONFIG.WalkSpeed ~= 16 then hum.WalkSpeed = CONFIG.WalkSpeed end
+        if CONFIG.JumpPower ~= 50 then hum.JumpPower = CONFIG.JumpPower end
+    end
 
-    for target, indicator in pairs(indicators) do
-        if target and target.Parent then
-            local itemPos = getPartInfo(target)
-            if itemPos then
-                local distance = (playerPos - itemPos).Magnitude
-                local inRange  = (CONFIG.MaxDistance == 0) or (distance <= CONFIG.MaxDistance)
+    -- Enforce Fullbright
+    if CONFIG.Fullbright then
+        Lighting.Ambient = Color3.new(1, 1, 1)
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.GlobalShadows = false
+    else
+        Lighting.Ambient = DefaultLighting.Ambient
+        Lighting.Brightness = DefaultLighting.Brightness
+        Lighting.ClockTime = DefaultLighting.ClockTime
+        Lighting.GlobalShadows = DefaultLighting.GlobalShadows
+    end
 
-                local highlight = highlighted[target]
-                if highlight then
-                    highlight.Enabled = inRange and CONFIG.Enabled
-                end
+    -- Process ESP Visuals
+    if hrp then
+        for target, indicator in pairs(indicators) do
+            if target and target.Parent then
+                local itemPos = getPartInfo(target)
+                if itemPos then
+                    local distance = (hrp.Position - itemPos).Magnitude
+                    
+                    -- Check if it's a player to bypass MaxDistance logic if needed, 
+                    -- or apply it globally. We apply globally here.
+                    local isPlayerTarget = Players:GetPlayerFromCharacter(target) ~= nil
+                    local inRange = (CONFIG.MaxDistance == 0) or (distance <= CONFIG.MaxDistance)
 
-                if indicator then
-                    if CONFIG.ShowDistance and inRange then
+                    local hl = highlighted[target]
+                    if hl then 
+                        hl.Enabled = inRange and (isPlayerTarget and CONFIG.PlayerESP or (not isPlayerTarget and CONFIG.Enabled))
+                    end
+
+                    if CONFIG.ShowDistance and inRange and hl and hl.Enabled then
                         local label = indicator:FindFirstChild("DistanceText")
                         if label then
-                            label.Text = string.format("[ %d Studs ]", math.floor(distance + 0.5))
+                            local prefix = label:GetAttribute("Prefix")
+                            if prefix then
+                                label.Text = string.format("%s\n[ %d Studs ]", prefix, math.floor(distance + 0.5))
+                            else
+                                label.Text = string.format("[ %d Studs ]", math.floor(distance + 0.5))
+                            end
                             indicator.Enabled = true
                         end
                     else
                         indicator.Enabled = false
                     end
                 end
-            else
-                detachHighlight(target)
             end
         end
     end
 end)
-
--- // Listen for newly-added Essences
-Workspace.DescendantAdded:Connect(onEssenceAdded)
 
 -- // Initial scan
 updateESP()
 
 -- // Fluent UI Setup
 local Window = Fluent:CreateWindow({
-    Title    = "Restoration Essence ESP",
-    SubTitle = "v2.0 – Dual-Loop AutoFarm",
+    Title    = "Restoration Essence Hub",
+    SubTitle = "v3.0 - Ultimate Edition",
     TabWidth = 160,
-    Size     = UDim2.fromOffset(480, 420),
+    Size     = UDim2.fromOffset(500, 480),
     Theme    = "Dark",
 })
 
 local Tabs = {
-    ESP = Window:AddTab({Title = "ESP Settings", Icon = "eye"})
+    ESP    = Window:AddTab({Title = "ESP & AutoFarm", Icon = "eye"}),
+    Local  = Window:AddTab({Title = "LocalPlayer", Icon = "user"}),
+    Misc   = Window:AddTab({Title = "Misc", Icon = "settings"}),
 }
 
--- UI Controls
-local Toggle = Tabs.ESP:AddToggle("ESPToggle", {Title = "Enable ESP", Default = CONFIG.Enabled})
-Toggle:OnChanged(function(state)
-    CONFIG.Enabled = state
-    if not state then
-        for t in pairs(highlighted) do detachHighlight(t) end
-    else
-        updateESP()
-    end
+-- =====================
+-- TAB 1: ESP & AutoFarm
+-- =====================
+Tabs.ESP:AddToggle("ESPToggle", {Title = "Enable Item ESP", Default = CONFIG.Enabled}):OnChanged(function(s) CONFIG.Enabled = s; updateESP() end)
+Tabs.ESP:AddToggle("PlayerESPToggle", {Title = "Enable Player ESP", Default = CONFIG.PlayerESP}):OnChanged(function(s) CONFIG.PlayerESP = s; updateESP() end)
+Tabs.ESP:AddKeybind("ESPKeybind", {Title = "Toggle Item ESP Keybind", Mode = "Toggle", Default = "Z", Callback = function(s) CONFIG.Enabled = s; updateESP() end})
+
+Tabs.ESP:AddColorpicker("ESPColor", {Title = "Item ESP Color", Default = CONFIG.Color}):OnChanged(function(c)
+    CONFIG.Color = c
+    for t, h in pairs(highlighted) do if not Players:GetPlayerFromCharacter(t) then h.FillColor = c; h.OutlineColor = c end end
+end)
+Tabs.ESP:AddColorpicker("PlayerESPColor", {Title = "Player ESP Color", Default = CONFIG.PlayerESPColor}):OnChanged(function(c)
+    CONFIG.PlayerESPColor = c
+    for t, h in pairs(highlighted) do if Players:GetPlayerFromCharacter(t) then h.FillColor = c; h.OutlineColor = c end end
 end)
 
-local Keybind = Tabs.ESP:AddKeybind("ESPKeybind", {
-    Title    = "Toggle Keybind",
-    Mode     = "Toggle",
-    Default  = "Z",
-    Callback = function(state)
-        Toggle:SetValue(state)
-    end,
-})
+Tabs.ESP:AddSlider("MaxDistance", {Title = "Max ESP Distance (0=off)", Min = 0, Max = 1000, Default = CONFIG.MaxDistance, Rounding = 0}):OnChanged(function(v) CONFIG.MaxDistance = v end)
+Tabs.ESP:AddToggle("DistanceToggle", {Title = "Show Distance Text", Default = CONFIG.ShowDistance}):OnChanged(function(s) CONFIG.ShowDistance = s end)
 
-local ColorPicker = Tabs.ESP:AddColorpicker("ESPColor", {
-    Title   = "ESP Colour",
-    Default = CONFIG.Color
-})
-ColorPicker:OnChanged(function(col)
-    CONFIG.Color = col
-    for _, h in pairs(highlighted) do
-        h.FillColor   = col
-        h.OutlineColor = col
-    end
-end)
+Tabs.ESP:AddToggle("AutoFarmToggle", {Title = "AutoFarm Essences (3.5s)", Default = CONFIG.AutoFarm}):OnChanged(function(s) CONFIG.AutoFarm = s; if s then runAutoFarm() end end)
+Tabs.ESP:AddToggle("ToolGrabToggle", {Title = "Auto-Grab All Tools (3.5s)", Default = CONFIG.GrabAllTools}):OnChanged(function(s) CONFIG.GrabAllTools = s; if s then runGrabAllTools() end end)
+Tabs.ESP:AddButton({Title = "Grab All Tools Now", Callback = function() runGrabAllTools() end})
+Tabs.ESP:AddButton({Title = "Scan Workspace Now", Callback = function() updateESP() end})
 
-local TransparencySlider = Tabs.ESP:AddSlider("ESPTransparency", {
-    Title    = "Transparency",
-    Min      = 0,
-    Max      = 1,
-    Default  = CONFIG.Transparency,
-    Rounding = 2
-})
-TransparencySlider:OnChanged(function(val)
-    CONFIG.Transparency = val
-    for _, h in pairs(highlighted) do
-        h.FillTransparency = val
-    end
-end)
+-- =====================
+-- TAB 2: LocalPlayer
+-- =====================
+Tabs.Local:AddSlider("WS_Slider", {Title = "WalkSpeed", Min = 16, Max = 150, Default = 16, Rounding = 0}):OnChanged(function(v) CONFIG.WalkSpeed = v end)
+Tabs.Local:AddSlider("JP_Slider", {Title = "JumpPower", Min = 50, Max = 300, Default = 50, Rounding = 0}):OnChanged(function(v) CONFIG.JumpPower = v end)
+Tabs.Local:AddToggle("InfJumpToggle", {Title = "Infinite Jump", Default = CONFIG.InfJump}):OnChanged(function(s) CONFIG.InfJump = s end)
+Tabs.Local:AddToggle("FullbrightToggle", {Title = "Fullbright (No Shadows)", Default = CONFIG.Fullbright}):OnChanged(function(s) CONFIG.Fullbright = s end)
+Tabs.Local:AddButton({Title = "Reset Character", Callback = function() if player.Character then player.Character:BreakJoints() end end})
 
-local DistanceToggle = Tabs.ESP:AddToggle("DistanceToggle", {Title = "Show Distance", Default = CONFIG.ShowDistance})
-DistanceToggle:OnChanged(function(state)
-    CONFIG.ShowDistance = state
-end)
-
-local MaxDistanceSlider = Tabs.ESP:AddSlider("MaxDistance", {
-    Title    = "Max Distance (studs, 0=off)",
-    Min      = 0,
-    Max      = 500,
-    Default  = CONFIG.MaxDistance,
-    Rounding = 0
-})
-MaxDistanceSlider:OnChanged(function(val)
-    CONFIG.MaxDistance = val
-end)
-
-local AutoFarmToggle = Tabs.ESP:AddToggle("AutoFarmToggle", {Title = "AutoFarm (Auto-Grab 3.5s)", Default = CONFIG.AutoFarm})
-AutoFarmToggle:OnChanged(function(state)
-    CONFIG.AutoFarm = state
-    if state then
-        runAutoFarm() -- Immediate check when turned on
-    end
-end)
-
-Tabs.ESP:AddButton({
-    Title    = "Grab Nearest (Ground Only)",
-    Callback = function() grabNearest() end
-})
-
-Tabs.ESP:AddButton({
-    Title    = "Scan Now",
-    Callback = function() updateESP() end
-})
+-- =====================
+-- TAB 3: Misc
+-- =====================
+Tabs.Misc:AddButton({Title = "Server Hop (Find New Server)", Callback = function() serverHop() end})
+Tabs.Misc:AddButton({Title = "Rejoin Current Server", Callback = function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player) end})
 
 -- // Cleanup Tasks
 local function cleanup()
     for t in pairs(highlighted) do detachHighlight(t) end
-    highlighted    = {}
-    indicators     = {}
-    highlightCount = 0
-    lastGrab       = {}
+    highlighted = {}; indicators = {}; highlightCount = 0; lastGrab = {}
 end
 
-if player then
-    player.AncestryChanged:Connect(function(_, parent)
-        if not parent then cleanup() end
-    end)
-end
-
-RunService.Heartbeat:Connect(function()
-    if not Players.LocalPlayer or not Players.LocalPlayer.Parent then
-        cleanup()
-    end
-end)
+if player then player.AncestryChanged:Connect(function(_, parent) if not parent then cleanup() end end) end
+RunService.Heartbeat:Connect(function() if not Players.LocalPlayer or not Players.LocalPlayer.Parent then cleanup() end end)
