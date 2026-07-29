@@ -22,7 +22,7 @@ local lastY = 0
 -- // Configuration
 local CONFIG = {
     AutoShootEnabled = true,
-    TargetY = 0.920,
+    TargetY = 0.77,
     SpeedEnabled = false,
     SpeedBoost = 15
 }
@@ -33,7 +33,7 @@ local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/
 -- // Create Window
 local Window = Fluent:CreateWindow({
     Title    = "RB World Hub",
-    SubTitle = "Heartbeat Auto Green & Speed",
+    SubTitle = "realscrpts",
     TabWidth = 160,
     Size     = UDim2.fromOffset(480, 350),
     Theme    = "Dark",
@@ -58,16 +58,16 @@ ShootToggle:OnChanged(function(state)
 end)
 
 local ValueInput = Tabs.Shooting:AddInput("TargetYInput", {
-    Title = "Target Y Value",
+    Title = "Timing (Do 0.77)",
     Default = tostring(CONFIG.TargetY),
-    Placeholder = "e.g. 0.920",
+    Placeholder = "e.g. 0.77",
     Numeric = false, 
     Finished = true, 
     Callback = function(text)
         local parsedNumber = tonumber(text)
         if parsedNumber then
             CONFIG.TargetY = parsedNumber
-            Fluent:Notify({Title = "Updated", Content = "Target Y set to: " .. text, Duration = 3})
+            Fluent:Notify({Title = "Updated", Content = "Timing: " .. text, Duration = 3})
         end
     end
 })
