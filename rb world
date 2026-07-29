@@ -1,6 +1,7 @@
 --[[
     RB World Ultimate Hub
     -------------------------------------------------
+    • FIXED: Dynamic ClientEvent locator (no more indexing nil errors)
     • Prediction Engine for perfect mid-frame shot releases (Heartbeat)
     • Workspace-Targeted Pivot Speed (Bypasses disconnected player.Character)
     • Fluent UI integration
@@ -15,9 +16,21 @@ local Workspace = game:GetService("Workspace")
 
 -- // Variables
 local player = Players.LocalPlayer
-local clientEvent = ReplicatedStorage:GetChildren()[7]:WaitForChild("ClientEvent")
 local hasShot = false
 local lastY = 0
+
+-- // Safely Locate the ClientEvent
+local clientEvent = nil
+for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+    if obj.Name == "ClientEvent" and obj:IsA("RemoteEvent") then
+        clientEvent = obj
+        break
+    end
+end
+
+if not clientEvent then
+    warn("[RB World Hub]: Could not find ClientEvent! Auto Shoot will not work.")
+end
 
 -- // Configuration
 local CONFIG = {
@@ -150,7 +163,7 @@ end)
 -- LOOP 2: AUTO SHOOT PREDICTION (HEARTBEAT)
 -- ===========================
 RunService.Heartbeat:Connect(function(dt)
-    if not CONFIG.AutoShootEnabled then return end
+    if not CONFIG.AutoShootEnabled or not clientEvent then return end
     
     local shotMeter = player.PlayerGui:FindFirstChild("ShotMeterUI_Vertical")
     
