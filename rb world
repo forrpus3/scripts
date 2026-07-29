@@ -1,0 +1,197 @@
+--[[
+    RB World Ultimate Hub
+    -------------------------------------------------
+    • Prediction Engine for perfect mid-frame shot releases (Heartbeat)
+    • Workspace-Targeted Pivot Speed (Bypasses disconnected player.Character)
+    • Fluent UI integration
+]]
+
+-- // Services
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+-- // Variables
+local player = Players.LocalPlayer
+local clientEvent = ReplicatedStorage:GetChildren()[7]:WaitForChild("ClientEvent")
+local hasShot = false
+local lastY = 0
+
+-- // Configuration
+local CONFIG = {
+    AutoShootEnabled = true,
+    TargetY = 0.920,
+    SpeedEnabled = false,
+    SpeedBoost = 15
+}
+
+-- // Fetch Fluent UI
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+-- // Create Window
+local Window = Fluent:CreateWindow({
+    Title    = "RB World Hub",
+    SubTitle = "Heartbeat Auto Green & Speed",
+    TabWidth = 160,
+    Size     = UDim2.fromOffset(480, 350),
+    Theme    = "Dark",
+})
+
+-- // Create Tabs
+local Tabs = {
+    Shooting = Window:AddTab({ Title = "Auto Shoot", Icon = "crosshair" }),
+    Movement = Window:AddTab({ Title = "Player Mods", Icon = "user" })
+}
+
+-- ===========================
+-- TAB 1: AUTO SHOOT
+-- ===========================
+local ShootToggle = Tabs.Shooting:AddToggle("AutoGreenToggle", {
+    Title = "Enable Auto Green",
+    Default = CONFIG.AutoShootEnabled
+})
+
+ShootToggle:OnChanged(function(state)
+    CONFIG.AutoShootEnabled = state
+end)
+
+local ValueInput = Tabs.Shooting:AddInput("TargetYInput", {
+    Title = "Target Y Value",
+    Default = tostring(CONFIG.TargetY),
+    Placeholder = "e.g. 0.920",
+    Numeric = false, 
+    Finished = true, 
+    Callback = function(text)
+        local parsedNumber = tonumber(text)
+        if parsedNumber then
+            CONFIG.TargetY = parsedNumber
+            Fluent:Notify({Title = "Updated", Content = "Target Y set to: " .. text, Duration = 3})
+        end
+    end
+})
+
+-- ===========================
+-- TAB 2: MOVEMENT
+-- ===========================
+local SpeedToggle = Tabs.Movement:AddToggle("SpeedToggle", {
+    Title = "Enable Speed Bypass",
+    Default = CONFIG.SpeedEnabled
+})
+
+SpeedToggle:OnChanged(function(state)
+    CONFIG.SpeedEnabled = state
+end)
+
+local SpeedSlider = Tabs.Movement:AddSlider("SpeedSlider", {
+    Title = "Extra Speed Boost",
+    Min = 1,
+    Max = 100,
+    Default = CONFIG.SpeedBoost,
+    Rounding = 0
+})
+
+SpeedSlider:OnChanged(function(value)
+    CONFIG.SpeedBoost = value
+end)
+
+-- // Helper 1: Find the TRUE character in Workspace
+local function getTrueCharacter()
+    local workspaceChar = Workspace:FindFirstChild(player.Name)
+    if workspaceChar and workspaceChar:IsA("Model") then
+        return workspaceChar
+    end
+    return player.Character
+end
+
+-- // Helper 2: Read WASD keys relative to Camera
+local function getCameraMoveVector()
+    local moveDir = Vector3.new(0, 0, 0)
+    local cam = Workspace.CurrentCamera
+    if not cam then return moveDir end
+
+    local look = cam.CFrame.LookVector
+    local right = cam.CFrame.RightVector
+    look = Vector3.new(look.X, 0, look.Z).Unit
+    right = Vector3.new(right.X, 0, right.Z).Unit
+
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + look end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - look end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + right end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - right end
+
+    if moveDir.Magnitude > 0 then
+        return moveDir.Unit
+    end
+    return moveDir
+end
+
+-- ===========================
+-- LOOP 1: POST-PHYSICS MOVEMENT (HEARTBEAT)
+-- ===========================
+RunService.Heartbeat:Connect(function(dt)
+    if CONFIG.SpeedEnabled then
+        local trueChar = getTrueCharacter()
+        
+        if trueChar then
+            local moveVector = getCameraMoveVector()
+            
+            if moveVector.Magnitude > 0 then
+                local currentPivot = trueChar:GetPivot()
+                local newPivot = currentPivot + (moveVector * (CONFIG.SpeedBoost * dt))
+                trueChar:PivotTo(newPivot)
+            end
+        end
+    end
+end)
+
+-- ===========================
+-- LOOP 2: AUTO SHOOT PREDICTION (HEARTBEAT)
+-- ===========================
+RunService.Heartbeat:Connect(function(dt)
+    if not CONFIG.AutoShootEnabled then return end
+    
+    local shotMeter = player.PlayerGui:FindFirstChild("ShotMeterUI_Vertical")
+    
+    if shotMeter and shotMeter.Enabled then
+        local canvas = shotMeter:FindFirstChild("Canvas")
+        local meter = canvas and canvas:FindFirstChild("Meter")
+        local bar = meter and meter:FindFirstChild("Bar")
+        
+        if bar then
+            local currentY = bar.Size.Y.Scale 
+            
+            if currentY < 0.1 then
+                hasShot = false
+                lastY = currentY
+                return
+            end
+            
+            if not hasShot then
+                if currentY < CONFIG.TargetY and currentY > lastY then
+                    local speed = (currentY - lastY) / dt
+                    local distanceLeft = CONFIG.TargetY - currentY
+                    local timeLeft = distanceLeft / speed
+                    
+                    if timeLeft > 0 and timeLeft <= dt then
+                        hasShot = true
+                        task.delay(timeLeft, function()
+                            local args = { "Shoot", false }
+                            clientEvent:FireServer(unpack(args))
+                        end)
+                    end
+                elseif currentY >= CONFIG.TargetY then
+                    hasShot = true
+                    local args = { "Shoot", false }
+                    clientEvent:FireServer(unpack(args))
+                end
+            end
+            
+            lastY = currentY
+        end
+    else
+        hasShot = false
+        lastY = 0
+    end
+end)
